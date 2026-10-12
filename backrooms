@@ -762,7 +762,7 @@ local function UpdateAtmosphere(distFromCenter)
 
     Lighting.OutdoorAmbient = ScaleColor(Color3.fromRGB(60, 56, 46)
         :Lerp(Color3.fromRGB(16, 18, 25), alpha2)
-        :Lerp(Color3.fromRGB(175, 172, 184), alpha3), LIGHT_SCALE)
+        :Lerp(Color3.fromRGB(175, 172, 184), alpha3), LIGHT_SCALE * (Blackout and 0.15 or 1))
 
     -- slow, slight (±3%) drift so the room feels alive
     local drift = 1 + math.sin(os.clock() * 0.35) * 0.03
@@ -3107,7 +3107,8 @@ RunService:BindToRenderStep("BackroomsEyeShake", Enum.RenderPriority.Camera.Valu
     end
 
     local grain = HiveMind.Grain
-    if grain and grain.Parent then
+    if grain and grain.Parent and t - (HiveMind.GrainT or 0) > 1 / 24 then
+        HiveMind.GrainT = t
         grain.Position = UDim2.fromOffset(-math.random(0, 128), -math.random(0, 128))
     end
 
