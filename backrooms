@@ -74,6 +74,16 @@ local DOORWAY_CHANCE = 0.10
 
 local DUST_RATE = IS_MOBILE and 2 or 6
 
+-- 💡 LIGHT INTENSITY — one knob for overall brightness (ambient, Lighting.Brightness, point lights).
+-- 0.55 = default dim, moody look. Raise toward 1.0 for brighter, lower toward 0.2 for darker.
+local LIGHT_INTENSITY = 0.55
+local LIGHT_SCALE = LIGHT_INTENSITY / 0.55
+local LIGHT_SAFE_MIN = 0.2 * LIGHT_SCALE -- a light dimmer than this no longer counts as "safe"
+
+local function ScaleColor(c, k)
+    return Color3.new(math.clamp(c.R * k, 0, 1), math.clamp(c.G * k, 0, 1), math.clamp(c.B * k, 0, 1))
+end
+
 -- 🎮 GAMEPLAY
 local FLASHLIGHT_KEY = Enum.KeyCode.F
 local SPRINT_KEY = Enum.KeyCode.LeftShift
@@ -175,7 +185,7 @@ local function GetPlayerLightSafety()
             local list = litLights[(ccx + dx) .. "_" .. (ccz + dz)]
             if list then
                 for _, e in ipairs(list) do
-                    if e.Light.Parent and e.Light.Brightness > 0.35 then
+                    if e.Light.Parent and e.Light.Brightness > LIGHT_SAFE_MIN then
                         local horiz = Vector3.new(e.Pos.X - p.X, 0, e.Pos.Z - p.Z).Magnitude
                         if horiz < LIGHT_SAFE_RADIUS then
                             return true
@@ -196,6 +206,22 @@ local function addEQ(s, lo, mid, hi)
     eq.HighGain = hi
     eq.Parent = s
     return eq
+end
+
+-- shared sound group with a compressor so stacked sounds never clip
+local BRMasterGroup = SoundService:FindFirstChild("BRMasterGroup")
+if BRMasterGroup then BRMasterGroup:Destroy() end
+BRMasterGroup = Instance.new("SoundGroup")
+BRMasterGroup.Name = "BRMasterGroup"
+BRMasterGroup.Volume = 1
+BRMasterGroup.Parent = SoundService
+do
+    local comp = Instance.new("CompressorSoundEffect")
+    comp.Threshold = -14
+    comp.Ratio = 6
+    comp.Attack = 0.01
+    comp.Release = 0.2
+    comp.Parent = BRMasterGroup
 end
 
 local occlusionParams = RaycastParams.new()
@@ -233,6 +259,7 @@ local function PlayAt(pos, id, vol, speed, maxDist, lifetime, eqLo, eqMid, eqHi)
     s.PlaybackSpeed = speed or 1
     s.RollOffMode = Enum.RollOffMode.InverseTapered
     s.RollOffMaxDistance = maxDist or 120
+    s.SoundGroup = BRMasterGroup
     pcall(function() s.RollOffMinDistance = 10 end)
     if eqLo then addEQ(s, eqLo, eqMid or 0, eqHi or 0) end
     pcall(ApplyOcclusion, s, pos, maxDist)
@@ -253,6 +280,7 @@ local function PlayScream()
             rev.DecayTime = 2.5
             rev.WetLevel = 0.5
             rev.Parent = s
+            s.SoundGroup = BRMasterGroup
             s.Parent = SoundService
             s:Play()
             Debris:AddItem(s, 4)
@@ -335,8 +363,23 @@ local function UpdateFootstepAcoustics(lvl)
             fx.eq.LowGain = lo
             fx.eq.MidGain = mid
             fx.eq.HighGain = hi
+            if fx.rev then
+                -- faint, short reverb tail on level 0 only
+                fx.rev.WetLevel = lvl == 0 and -9 or -80
+            end
         end
     end
+end
+
+local function addFootReverb(s)
+    local rev = Instance.new("ReverbSoundEffect")
+    rev.DecayTime = 0.45
+    rev.Density = 0.6
+    rev.Diffusion = 0.7
+    rev.DryLevel = 0
+    rev.WetLevel = -80
+    rev.Parent = s
+    return rev
 end
 
 local function SetupFootsteps(char)
@@ -382,9 +425,11 @@ local function SetupFootsteps(char)
             walk.Looped = true
             walk.Volume = 0
             local eq = addEQ(walk, 2, 1, -3)
+            local rev = addFootReverb(walk)
+            walk.SoundGroup = BRMasterGroup
             walk.Parent = root
             table.clear(FootstepSounds)
-            table.insert(FootstepSounds, { S = walk, eq = eq })
+            table.insert(FootstepSounds, { S = walk, eq = eq, rev = rev })
             UpdateFootstepAcoustics(HiveMind.CurrentLevel)
 
             local wasFalling, fallPeak = false, 0
@@ -412,9 +457,11 @@ local function SetupFootsteps(char)
                     if not walk.IsPlaying then walk:Play() end
                     local volMul = (lvl == 0 and 0.85) or (lvl == 1 and 1.0) or 0.75
                     local target = (0.5 + math.min(0.35, hSpeed / 60)) * volMul * MASTER
+                        * (0.94 + math.random() * 0.12)
                     walk.Volume += (target - walk.Volume) * 0.3
                     local baseSpeed = (lvl == 1 and 0.94) or (lvl == 2 and 0.97) or 1.0
                     walk.PlaybackSpeed = baseSpeed + math.sin(os.clock() * 1.7) * 0.012
+                        + (math.random() - 0.5) * 0.015
                 else
                     walk.Volume += (0 - walk.Volume) * 0.35
                     if walk.Volume < 0.02 and walk.IsPlaying then
@@ -432,16 +479,18 @@ local function SetupFootsteps(char)
             s.SoundId = FOOTSTEP_ID
             s.Volume = 0.55
             local eq = addEQ(s, 2, 1, -3)
+            local rev = addFootReverb(s)
+            s.SoundGroup = BRMasterGroup
             s.Parent = root
-            return s, eq
+            return s, eq, rev
         end
         table.clear(FootstepSounds)
-        local fsL, e1 = makeStep("BRFootstepsL")
-        local fsR, e2 = makeStep("BRFootstepsR")
-        local fsS, e3 = makeStep("BRFootstepScuff")
-        table.insert(FootstepSounds, { S = fsL, eq = e1 })
-        table.insert(FootstepSounds, { S = fsR, eq = e2 })
-        table.insert(FootstepSounds, { S = fsS, eq = e3 })
+        local fsL, e1, r1 = makeStep("BRFootstepsL")
+        local fsR, e2, r2 = makeStep("BRFootstepsR")
+        local fsS, e3, r3 = makeStep("BRFootstepScuff")
+        table.insert(FootstepSounds, { S = fsL, eq = e1, rev = r1 })
+        table.insert(FootstepSounds, { S = fsR, eq = e2, rev = r2 })
+        table.insert(FootstepSounds, { S = fsS, eq = e3, rev = r3 })
         UpdateFootstepAcoustics(HiveMind.CurrentLevel)
 
         local function scuffAfter(main)
@@ -494,8 +543,10 @@ local function SetupFootsteps(char)
                         base, span, volMul = 0.98, 0.04, 0.80
                     end
                     local s = left and fsL or fsR
-                    s.PlaybackSpeed = base + (left and 0 or 0.03) + math.random() * span
+                    s.PlaybackSpeed = (base + (left and 0 or 0.03) + math.random() * span)
+                        * (0.96 + math.random() * 0.08) * (Sprinting and 1.03 or 1)
                     s.Volume = (0.42 + math.min(0.3, hSpeed / 55)) * volMul * MASTER
+                        * (0.9 + math.random() * 0.2)
                     s:Play()
                     scuffAfter(s)
                     if math.random() < 0.05 then
@@ -519,6 +570,7 @@ local function SetupAudio()
         s.Volume = vol * MASTER
         s.PlaybackSpeed = speed
         s.Looped = true
+        s.SoundGroup = BRMasterGroup
         if lo then addEQ(s, lo, mid, hi) end
         s.Parent = SoundService
         s:Play()
@@ -526,6 +578,8 @@ local function SetupAudio()
     end
 
     sounds.Lvl0 = makeAmbience("AmbienceLvl0", AUDIO_LEVEL_0, 0.4, 1, 1, 0, -2)
+    -- low room-tone layer under the fluorescent buzz (same asset, slowed and low-passed)
+    sounds.RoomTone = makeAmbience("RoomTone", AUDIO_LEVEL_0, 0.12, 0.5, 6, -4, -16)
     sounds.Lvl2 = makeAmbience("AmbienceLvl2", AUDIO_LEVEL_2, 0, 1)
     sounds.Lvl3 = makeAmbience("AmbienceLvl3", AUDIO_LEVEL_3, 0, 1)
 
@@ -534,6 +588,7 @@ local function SetupAudio()
     heartbeatSound.SoundId = THUMP_ID
     heartbeatSound.Volume = 0
     addEQ(heartbeatSound, 10, -8, -12)
+    heartbeatSound.SoundGroup = BRMasterGroup
     heartbeatSound.Parent = SoundService
 
     if Player.Character then SetupFootsteps(Player.Character) end
@@ -555,7 +610,8 @@ local function SetupAudio()
     task.spawn(function()
         while RUNNING and heartbeatSound do
             local threat = math.clamp(1 - ((os.clock() - NearestThreatTime < 0.6) and NearestThreat or 999) / 30, 0, 1)
-            local intensity = math.clamp(threat * 0.95 + (Blackout and 0.35 or 0), 0, 1)
+            local exertion = math.clamp(1 - Stamina.Value / MAX_STAMINA, 0, 1)
+            local intensity = math.clamp(threat * 0.95 + (Blackout and 0.35 or 0) + exertion * 0.5, 0, 1)
             if intensity > 0.08 then
                 local v = (0.12 + intensity * 0.7) * MASTER
                 heartbeatSound.Volume = v
@@ -575,10 +631,37 @@ local function SetupAudio()
     task.spawn(function()
         while RUNNING do
             local t = os.clock()
-            if sounds.Lvl0 then sounds.Lvl0.PlaybackSpeed = 1 + math.sin(t * 0.11) * 0.01 end
+            if sounds.Lvl0 then sounds.Lvl0.PlaybackSpeed = 1 + math.sin(t * 0.11) * 0.01 + math.sin(t * 0.29) * 0.006 end
+            if sounds.RoomTone then sounds.RoomTone.PlaybackSpeed = 0.5 + math.sin(t * 0.07) * 0.02 end
             if sounds.Lvl2 then sounds.Lvl2.PlaybackSpeed = 1 + math.sin(t * 0.05) * 0.006 end
             if sounds.Lvl3 then sounds.Lvl3.PlaybackSpeed = 1 + math.sin(t * 0.04) * 0.008 end
             task.wait(0.4)
+        end
+    end)
+
+    -- occasional distant office sounds on level 0 (HVAC rumble, far-off door); occluded by walls
+    task.spawn(function()
+        while RUNNING do
+            task.wait(math.random(9, 28))
+            if HiveMind.CurrentLevel == 0 and not Blackout then
+                local camPos = Camera.CFrame.Position
+                local angle = math.random() * math.pi * 2
+                local dist = 50 + math.random() * 70
+                local pos = Vector3.new(
+                    camPos.X + math.cos(angle) * dist,
+                    WALL_HEIGHT * 0.8,
+                    camPos.Z + math.sin(angle) * dist)
+                if math.random() < 0.5 then
+                    -- HVAC: slowed, low-passed buzz
+                    PlayAt(pos, AUDIO_LEVEL_0, 0.18, 0.4 + math.random() * 0.1, 200, 6, 8, -4, -18)
+                else
+                    -- far-off door: a muffled thump followed by a slow creak
+                    PlayAt(pos, THUMP_ID, 0.3, 0.5 + math.random() * 0.15, 220, 4, 4, -2, -16)
+                    task.delay(0.15 + math.random() * 0.2, function()
+                        if RUNNING then PlayAt(pos, CREAK_ID, 0.16, 0.5 + math.random() * 0.2, 200, 5, 2, -2, -12) end
+                    end)
+                end
+            end
         end
     end)
 
@@ -636,27 +719,31 @@ local function UpdateAtmosphere(distFromCenter)
     local alpha2 = math.clamp((distFromCenter - LEVEL_2_DISTANCE) / 2, 0, 1)
     local alpha3 = math.clamp((distFromCenter - LEVEL_3_DISTANCE) / 2, 0, 1)
 
-    sounds.Lvl0.Volume = (1 - alpha2) * 0.4 * MASTER
+    local humDrift = 1 + math.sin(os.clock() * 0.23) * 0.08 + math.sin(os.clock() * 0.61) * 0.04
+    sounds.Lvl0.Volume = (1 - alpha2) * 0.4 * MASTER * humDrift
+    if sounds.RoomTone then sounds.RoomTone.Volume = (1 - alpha2) * 0.12 * MASTER * humDrift end
     sounds.Lvl2.Volume = alpha2 * (1 - alpha3) * 0.62 * MASTER
     sounds.Lvl3.Volume = alpha3 * 0.75 * MASTER
 
     if atmosphereEffect then
-        local c1 = Color3.fromRGB(214, 206, 170)
+        local c1 = Color3.fromRGB(170, 162, 128)
         local c2 = Color3.fromRGB(22, 23, 30)
-        local c3 = Color3.fromRGB(236, 228, 250)
+        local c3 = Color3.fromRGB(177, 171, 188)
         atmosphereEffect.Color = c1:Lerp(c2, alpha2):Lerp(c3, alpha3)
-        local d1 = Color3.fromRGB(118, 108, 72)
+        local d1 = Color3.fromRGB(80, 72, 48)
         local d2 = Color3.fromRGB(7, 7, 9)
-        local d3 = Color3.fromRGB(186, 182, 208)
+        local d3 = Color3.fromRGB(140, 137, 156)
         atmosphereEffect.Decay = d1:Lerp(d2, alpha2):Lerp(d3, alpha3)
-        atmosphereEffect.Density = 0.28 + alpha2 * 0.30 - alpha3 * 0.10
-        atmosphereEffect.Haze = 1.0 + alpha2 * 1.3 + alpha3 * 0.8
+        -- faint low fog + slightly stronger distant haze on level 0
+        atmosphereEffect.Density = 0.32 + alpha2 * 0.26 - alpha3 * 0.10
+        atmosphereEffect.Offset = 0.3 - alpha2 * 0.05
+        atmosphereEffect.Haze = 1.6 + alpha2 * 0.7 + alpha3 * 0.2
         atmosphereEffect.Glare = alpha3 * 0.2
         if sunRaysEffect then sunRaysEffect.Intensity = alpha3 * 0.3 end
     else
-        local color1 = Color3.fromRGB(198, 188, 146)
+        local color1 = Color3.fromRGB(150, 142, 110)
         local color2 = Color3.fromRGB(24, 25, 32)
-        local colorD = Color3.fromRGB(230, 222, 248)
+        local colorD = Color3.fromRGB(172, 166, 186)
         Lighting.FogColor = color1:Lerp(color2, alpha2):Lerp(colorD, alpha3)
         local baseFog = RENDER_RADIUS * CHUNK_SIZE - 30
         local fogEnd = baseFog * (1 - alpha2 * 0.45)
@@ -666,24 +753,28 @@ local function UpdateAtmosphere(distFromCenter)
     end
 
     -- L1 brighter/warmer, L2 deeper dark (more contrast), L3 airy
-    local amb = Color3.fromRGB(112, 105, 86)
+    local amb = Color3.fromRGB(58, 54, 44)
         :Lerp(Color3.fromRGB(10, 11, 17), alpha2)
-        :Lerp(Color3.fromRGB(200, 196, 210), alpha3)
+        :Lerp(Color3.fromRGB(150, 147, 158), alpha3)
+    amb = ScaleColor(amb, LIGHT_SCALE)
     if Blackout then amb = amb * 0.15 end
     Lighting.Ambient = amb
 
-    Lighting.OutdoorAmbient = Color3.fromRGB(108, 100, 77)
+    Lighting.OutdoorAmbient = ScaleColor(Color3.fromRGB(60, 56, 46)
         :Lerp(Color3.fromRGB(16, 18, 25), alpha2)
-        :Lerp(Color3.fromRGB(233, 229, 245), alpha3)
+        :Lerp(Color3.fromRGB(175, 172, 184), alpha3), LIGHT_SCALE)
 
-    Lighting.Brightness = 1.6 - alpha2 * 0.62 + alpha3 * 0.3
+    -- slow, slight (±3%) drift so the room feels alive
+    local drift = 1 + math.sin(os.clock() * 0.35) * 0.03
+    Lighting.Brightness = (0.9 - alpha2 * 0.35 + alpha3 * 0.41) * LIGHT_SCALE * drift
+    if Blackout then Lighting.Brightness = Lighting.Brightness * 0.25 end
 
     pcall(function()
-        Lighting.ExposureCompensation = 0.08 - alpha2 * 0.22 + alpha3 * 0.12
+        Lighting.ExposureCompensation = -0.25 - alpha2 * 0.22 + alpha3 * 0.32
     end)
 
     if ccEffect then
-        ccEffect.Brightness = 0.01 - alpha2 * 0.10 + alpha3 * 0.14
+        ccEffect.Brightness = 0 - alpha2 * 0.10 + alpha3 * 0.11
         ccEffect.Saturation = -0.03 - alpha2 * 0.28 + alpha3 * 0.5
         ccEffect.Contrast = 0.04 + alpha2 * 0.08
         local tint1 = Color3.fromRGB(255, 251, 240)
@@ -729,20 +820,20 @@ end
 
 -- 🎨 GRAPHICS -------------------------------------------------------------
 local function SetupGraphics()
-    Lighting.Ambient = Color3.fromRGB(108, 100, 80)
-    Lighting.OutdoorAmbient = Color3.fromRGB(120, 111, 86)
-    Lighting.Brightness = 1.6
+    Lighting.Ambient = ScaleColor(Color3.fromRGB(58, 54, 44), LIGHT_SCALE)
+    Lighting.OutdoorAmbient = ScaleColor(Color3.fromRGB(60, 56, 46), LIGHT_SCALE)
+    Lighting.Brightness = 0.9 * LIGHT_SCALE
     Lighting.GlobalShadows = true
     Lighting.ClockTime = 12
     pcall(function() Lighting.Technology = IS_MOBILE and Enum.Technology.ShadowMap or Enum.Technology.Future end)
-    pcall(function() Lighting.ExposureCompensation = 0.1 end)
+    pcall(function() Lighting.ExposureCompensation = -0.25 end)
     pcall(function() Lighting.ShadowSoftness = 0.4 end)
-    pcall(function() Lighting.EnvironmentDiffuseScale = 0.65 end)
-    pcall(function() Lighting.EnvironmentSpecularity = 0.45 end)
+    pcall(function() Lighting.EnvironmentDiffuseScale = 0.5 end)
+    pcall(function() Lighting.EnvironmentSpecularScale = 0.25 end)
 
     Lighting.FogStart = 50
     Lighting.FogEnd = RENDER_RADIUS * CHUNK_SIZE - 30
-    Lighting.FogColor = Color3.fromRGB(198, 188, 146)
+    Lighting.FogColor = Color3.fromRGB(150, 142, 110)
 
     for _, n in ipairs({"BR_CC", "BR_Bloom", "BR_Atmos", "BR_SunRays", "BR_Blur", "BR_Hurt", "BR_Sky", "BR_DOF"}) do
         local e = Lighting:FindFirstChild(n)
@@ -754,7 +845,7 @@ local function SetupGraphics()
     cc.TintColor = Color3.fromRGB(255, 251, 240)
     cc.Contrast = 0.04
     cc.Saturation = -0.03
-    cc.Brightness = 0.01
+    cc.Brightness = 0
     cc.Parent = Lighting
     ccEffect = cc
 
@@ -774,9 +865,9 @@ local function SetupGraphics()
     if not IS_MOBILE then
         local bloom = Instance.new("BloomEffect")
         bloom.Name = "BR_Bloom"
-        bloom.Intensity = 0.25
+        bloom.Intensity = 0.15
         bloom.Size = 20
-        bloom.Threshold = 1.02
+        bloom.Threshold = 1.2
         bloom.Parent = Lighting
 
         local blur = Instance.new("BlurEffect")
@@ -796,12 +887,12 @@ local function SetupGraphics()
 
         local atmo = Instance.new("Atmosphere")
         atmo.Name = "BR_Atmos"
-        atmo.Density = 0.28
-        atmo.Offset = 0.25
-        atmo.Color = Color3.fromRGB(214, 206, 170)
-        atmo.Decay = Color3.fromRGB(118, 108, 72)
+        atmo.Density = 0.32
+        atmo.Offset = 0.3
+        atmo.Color = Color3.fromRGB(170, 162, 128)
+        atmo.Decay = Color3.fromRGB(80, 72, 48)
         atmo.Glare = 0
-        atmo.Haze = 1.0
+        atmo.Haze = 1.6
         atmo.Parent = Lighting
         atmosphereEffect = atmo
 
@@ -812,6 +903,60 @@ local function SetupGraphics()
         rays.Parent = Lighting
         sunRaysEffect = rays
     end
+
+    -- film grain + vignette overlay (grain is skipped on mobile)
+    pcall(function()
+        local pg = Player:WaitForChild("PlayerGui", 5)
+        if not pg then return end
+        local old = pg:FindFirstChild("BRHUD")
+        if old then old:Destroy() end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "BRHUD"
+        gui.IgnoreGuiInset = true
+        gui.ResetOnSpawn = false
+        gui.DisplayOrder = -1
+        gui.Parent = pg
+
+        if not IS_MOBILE then
+            local grain = Instance.new("ImageLabel")
+            grain.Name = "Grain"
+            grain.BackgroundTransparency = 1
+            grain.Size = UDim2.new(1, 128, 1, 128)
+            grain.Position = UDim2.fromOffset(0, 0)
+            grain.Image = TEX_FLOOR_0 -- any fine tiled noise image works here
+            grain.ScaleType = Enum.ScaleType.Tile
+            grain.TileSize = UDim2.fromOffset(96, 96)
+            grain.ImageTransparency = 0.93
+            grain.ZIndex = 1
+            grain.Parent = gui
+            HiveMind.Grain = grain
+        end
+
+        -- vignette: four soft edge gradients (no external asset needed)
+        local function edge(anchor, pos, size, rot)
+            local f = Instance.new("Frame")
+            f.Name = "Vignette"
+            f.BorderSizePixel = 0
+            f.BackgroundColor3 = Color3.new(0, 0, 0)
+            f.AnchorPoint = anchor
+            f.Position = pos
+            f.Size = size
+            f.ZIndex = 2
+            local g = Instance.new("UIGradient")
+            g.Rotation = rot
+            g.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.45),
+                NumberSequenceKeypoint.new(0.5, 0.85),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            g.Parent = f
+            f.Parent = gui
+        end
+        edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(0.3, 1), 0)
+        edge(Vector2.new(1, 0), UDim2.fromScale(1, 0), UDim2.fromScale(0.3, 1), 180)
+        edge(Vector2.new(0, 0), UDim2.fromScale(0, 0), UDim2.fromScale(1, 0.3), 90)
+        edge(Vector2.new(0, 1), UDim2.fromScale(0, 1), UDim2.fromScale(1, 0.3), 270)
+    end)
 
     Camera.FieldOfView = FOV
 end
@@ -973,6 +1118,36 @@ local function CreateDoorway(parent, alongZ, worldX, worldZ, wTex, wCol, materia
     end
 end
 
+-- dust motes drift down inside a light cone (attached to a lit ceiling panel)
+local function CreateDust(part, offset, rate)
+    local attach = Instance.new("Attachment")
+    attach.Position = offset
+    attach.Parent = part
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Rate = math.min(rate or DUST_RATE, DUST_RATE)
+    emitter.Speed = NumberRange.new(0.2, 0.8)
+    emitter.EmissionDirection = Enum.NormalId.Bottom
+    emitter.SpreadAngle = Vector2.new(35, 35)
+    emitter.Lifetime = NumberRange.new(8, 14)
+    emitter.Texture = "rbxassetid://243660364"
+    emitter.LightInfluence = 0.6
+    emitter.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.15, 0.82),
+        NumberSequenceKeypoint.new(0.85, 0.82),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.25), NumberSequenceKeypoint.new(1, 0.7) })
+    emitter.Color = ColorSequence.new(Color3.fromRGB(205, 200, 185))
+    emitter.Parent = attach
+end
+
+-- faint electrical pop when a nearby light flickers (skipped if far from the player)
+local function FlickerPop(pos)
+    if (pos - HiveMind.PlayerPos).Magnitude > 70 then return end
+    PlayAt(pos, CREAK_ID, 0.12, 2.2 + math.random() * 0.6, 70, 2, -6, 2, -3)
+end
+
 -- 🏢 SOLID DROP CEILING — varied real-world tube temps + aged diffusers
 local function CreateCeilingTile(chunk, data, x, z, level, gx, gz, rng)
     local isLightTile = (gx % 2 == 0) and (gz % 2 == 0)
@@ -1060,13 +1235,13 @@ local function CreateCeilingTile(chunk, data, x, z, level, gx, gz, rng)
         panel.Color = level == 2 and Color3.fromRGB(66, 68, 74) or Color3.fromRGB(150, 145, 130)
     else
         if level == 2 then
-            panel.Color = JitterColor(Color3.fromRGB(160, 175, 205), 0.10, rng)
+            panel.Color = JitterColor(Color3.fromRGB(120, 132, 156), 0.10, rng)
         else
             local age = rng()
             if age < 0.2 then
-                panel.Color = Color3.fromRGB(248, 238, 204) -- yellowed old diffuser
+                panel.Color = Color3.fromRGB(212, 198, 148) -- yellowed old diffuser
             else
-                panel.Color = JitterColor(Color3.fromRGB(255, 250, 226), 0.05, rng)
+                panel.Color = JitterColor(Color3.fromRGB(226, 216, 178), 0.05, rng)
             end
         end
     end
@@ -1100,7 +1275,7 @@ local function CreateCeilingTile(chunk, data, x, z, level, gx, gz, rng)
     if level == 2 then
         light.Color = Color3.fromRGB(196, 210, 245)
         light.Range = 26
-        light.Brightness = 1.0
+        light.Brightness = 0.6 * LIGHT_SCALE
     else
         -- real fluorescent installs vary: some warm/aging, most neutral
         local t = rng()
@@ -1112,12 +1287,18 @@ local function CreateCeilingTile(chunk, data, x, z, level, gx, gz, rng)
             light.Color = Color3.fromRGB(255, 247, 216)
         end
         light.Range = 34
-        light.Brightness = 1.45
+        light.Brightness = 0.82 * LIGHT_SCALE
     end
     light.Parent = panel
 
     table.insert(data.Lights, { Light = light, Base = light.Brightness })
     RegisterLit(data.Key, panel.Position, light)
+
+    -- dust motes only where a light cone exists (max 2 emitters per chunk)
+    if (data.DustCount or 0) < 2 and rng() < 0.5 then
+        data.DustCount = (data.DustCount or 0) + 1
+        CreateDust(panel, Vector3.new(0, -1, 0), DUST_RATE * 0.75)
+    end
 
     local buzz, buzzVol = nil, 0
     if not data.HasBuzz then
@@ -1128,12 +1309,13 @@ local function CreateCeilingTile(chunk, data, x, z, level, gx, gz, rng)
         buzz.Volume = buzzVol
         buzz.PlaybackSpeed = 0.97 + rng() * 0.06
         buzz.Looped = true
+        buzz.SoundGroup = BRMasterGroup
         buzz.RollOffMode = Enum.RollOffMode.InverseTapered
         buzz.RollOffMaxDistance = 60
         pcall(function() buzz.RollOffMinDistance = 8 end)
         buzz.Parent = panel
         buzz:Play()
-        table.insert(data.Buzzes, { S = buzz, V = buzzVol, P = buzz.PlaybackSpeed })
+        table.insert(data.Buzzes, { S = buzz, V = buzzVol, P = buzz.PlaybackSpeed, Drift = not faulty, Ph = math.random() * 6.28 })
     end
 
     if faulty then
@@ -1167,6 +1349,7 @@ local function CreateCeilingTile(chunk, data, x, z, level, gx, gz, rng)
                     local level0 = base * dim
                     if os.clock() >= nextBurst then
                         -- stutter burst
+                        if math.random() < 0.4 then FlickerPop(panel.Position) end
                         for _ = 1, math.random(3, 8) do
                             if Blackout or not (RUNNING and panel.Parent and light.Parent) then break end
                             set(math.random() < 0.5 and 0.03 or level0)
@@ -1819,21 +2002,6 @@ local function CreateEye(chunk, pos)
     decal.Parent = billboard
 end
 
-local function CreateDust(part, offset)
-    local attach = Instance.new("Attachment")
-    attach.Position = offset
-    attach.Parent = part
-    local emitter = Instance.new("ParticleEmitter")
-    emitter.Rate = DUST_RATE
-    emitter.Speed = NumberRange.new(0, 2)
-    emitter.Lifetime = NumberRange.new(10, 20)
-    emitter.Texture = "rbxassetid://243660364"
-    emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.85), NumberSequenceKeypoint.new(1, 1) })
-    emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.6), NumberSequenceKeypoint.new(1, 2.5) })
-    emitter.Color = ColorSequence.new(Color3.fromRGB(205, 200, 185))
-    emitter.Parent = attach
-end
-
 -- 🏠 DREAMCORE PROPS -----------------------------------------------------
 local function CreateDreamOrb(chunk, data, x, z, rng)
     local orb = Instance.new("Part")
@@ -1847,9 +2015,9 @@ local function CreateDreamOrb(chunk, data, x, z, rng)
     local light = Instance.new("PointLight")
     light.Color = orb.Color
     light.Range = 32
-    light.Brightness = 1.1
+    light.Brightness = 0.83 * LIGHT_SCALE
     light.Parent = orb
-    table.insert(data.Lights, { Light = light, Base = 1.1 })
+    table.insert(data.Lights, { Light = light, Base = light.Brightness })
 end
 
 local function CreateCloud(parent, x, z, rng)
@@ -2230,9 +2398,9 @@ local function BuildChunkInstant(cx, cz)
     else
         level = 1
         wTex = WallTex.Current; fTex = TEX_FLOOR_0
-        wCol = Color3.fromRGB(204, 194, 140)
-        fCol = JitterColor(Color3.fromRGB(166, 155, 112), 0.12, rng) -- worn carpet variation
-        wallMaterial = Enum.Material.SmoothPlastic
+        wCol = Color3.fromRGB(176, 166, 118)
+        fCol = JitterColor(Color3.fromRGB(138, 128, 90), 0.12, rng) -- worn carpet variation
+        wallMaterial = Enum.Material.Plastic -- lower specular than SmoothPlastic
     end
 
     TexVar = {
@@ -2253,10 +2421,7 @@ local function BuildChunkInstant(cx, cz)
     ApplyTexture(floor, fTex, Enum.NormalId.Top, fCol, isLevel2 and 4 or 5, 0.2)
     floor.Parent = chunk
 
-    if not isLevel3 then
-        CreateDust(floor, Vector3.new(rng() * 30 - 15, 6, rng() * 30 - 15))
-        if rng() < 0.5 then CreateDust(floor, Vector3.new(rng() * 30 - 15, 5, rng() * 30 - 15)) end
-    else
+    if isLevel3 then
         for _ = 1, 2 + math.floor(rng() * 3) do
             CreateCloud(chunk, cx * CHUNK_SIZE + math.floor(rng() * 51) - 25, cz * CHUNK_SIZE + math.floor(rng() * 51) - 25, rng)
         end
@@ -2937,8 +3102,13 @@ RunService:BindToRenderStep("BackroomsEyeShake", Enum.RenderPriority.Camera.Valu
         -- faint glare: lift bloom a touch while the flashlight is on
         local bloom = Lighting:FindFirstChild("BR_Bloom")
         if bloom then
-            bloom.Intensity = bloom.Intensity + ((Flashlight.On and 0.4 or 0.25) - bloom.Intensity) * math.min(dt * 4, 1)
+            bloom.Intensity = bloom.Intensity + ((Flashlight.On and 0.22 or 0.15) - bloom.Intensity) * math.min(dt * 4, 1)
         end
+    end
+
+    local grain = HiveMind.Grain
+    if grain and grain.Parent then
+        grain.Position = UDim2.fromOffset(-math.random(0, 128), -math.random(0, 128))
     end
 
     local char = Player.Character
@@ -3022,12 +3192,16 @@ task.spawn(function()
                 Stamina.Value = math.min(MAX_STAMINA, Stamina.Value + STAMINA_REGEN * 0.1)
             end
             Sprinting = wantSprint
-            if Stamina.Value < EXHAUST_BREATH_AT and math.random() < 0.12 then
+            local exhaust = math.clamp((EXHAUST_BREATH_AT - Stamina.Value) / EXHAUST_BREATH_AT, 0, 1)
+            local fear = math.clamp(1 - ((os.clock() - NearestThreatTime < 0.6) and NearestThreat or 999) / 30, 0, 1)
+            local breathMix = math.max(exhaust, fear * 0.6)
+            if breathMix > 0.02 and math.random() < 0.06 + breathMix * 0.16 then
                 local b = Instance.new("Sound")
                 b.SoundId = THUMP_ID
-                b.Volume = 0.16 * MASTER
-                b.PlaybackSpeed = 0.24 + math.random() * 0.06
+                b.Volume = (0.08 + breathMix * 0.12) * MASTER
+                b.PlaybackSpeed = (0.24 + math.random() * 0.06) * (1 + breathMix * 0.15)
                 addEQ(b, 6, -4, -10)
+                b.SoundGroup = BRMasterGroup
                 b.Parent = SoundService
                 b:Play()
                 Debris:AddItem(b, 2)
@@ -3069,6 +3243,7 @@ task.spawn(function()
                         task.spawn(function()
                             local b = L.Light.Brightness
                             if b <= 0.05 then return end
+                            if L.Light.Parent:IsA("BasePart") then FlickerPop(L.Light.Parent.Position) end
                             for _ = 1, math.random(2, 4) do
                                 L.Light.Brightness = b * (math.random() * 0.5)
                                 task.wait(math.random(3, 8) / 100)
@@ -3104,6 +3279,14 @@ task.spawn(function()
     while RUNNING do
         local t = os.clock()
         for _, c in pairs(loadedChunks) do
+            if not Blackout then
+                for _, b in ipairs(c.Buzzes) do
+                    if b.Drift and b.S.Parent then
+                        b.S.Volume = b.V * (1 + math.sin(t * 0.3 + b.Ph) * 0.1)
+                        b.S.PlaybackSpeed = b.P * (1 + math.sin(t * 0.17 + b.Ph * 2) * 0.012)
+                    end
+                end
+            end
             for _, a in ipairs(c.Animations) do
                 if a.Part and a.Part.Parent then
                     if a.Type == "bob" then
@@ -3129,9 +3312,10 @@ _G.BACKROOMS_STOP = function()
     for _, c in ipairs(Connections) do
         pcall(function() c:Disconnect() end)
     end
-    for _, s in ipairs(sounds) do
+    for _, s in pairs(sounds) do
         pcall(function() s:Stop() s:Destroy() end)
     end
+    pcall(function() if BRMasterGroup then BRMasterGroup:Destroy() end end)
     pcall(function()
         local pg = Player:FindFirstChild("PlayerGui")
         if pg then
