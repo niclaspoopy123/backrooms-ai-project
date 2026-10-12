@@ -14,68 +14,67 @@ local ContentProvider = game:GetService("ContentProvider")
 local Player = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
 
+-- stop a previous copy of this script if one is running
 if _G.BACKROOMS_STOP then pcall(_G.BACKROOMS_STOP) end
-_G.BACKROOMS_STOP = function()
-    RUNNING = false
-    if _G.BACKROOMS_TICK then
-        _G.BACKROOMS_TICK = nil
-    end
-end
-
 local RUNNING = true
-
-pcall(function()
-    RunService:UnbindFromRenderStep("BackroomsEyeShake")
-end)
-
-for _, name in ipairs({"DreamcoreMap", "BR8DOrbiter", "BR8DFlashPart"}) do
-    local old = Workspace:FindFirstChild(name)
+pcall(function() RunService:UnbindFromRenderStep("BackroomsEyeShake") end)
+for _, n in ipairs({"DreamcoreMap", "BR8DOrbiter", "BR8DFlashPart"}) do
+    local old = Workspace:FindFirstChild(n)
     if old then old:Destroy() end
 end
-
 pcall(function()
     local pg = Player:FindFirstChild("PlayerGui")
     if pg then
-        for _, name in ipairs({"BRHUD", "BRMobile"}) do
-            local old = pg:FindFirstChild(name)
+        for _, n in ipairs({"BRHUD", "BRMobile"}) do
+            local old = pg:FindFirstChild(n)
             if old then old:Destroy() end
         end
     end
 end)
 
+-- 📱 MOBILE DETECTION
 local IS_MOBILE = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
-local MASTER = 2.5
+
+-- 🔊 MASTER VOLUME — raise this if anything is too quiet (1.0 = old volume)
+local MASTER = 2.0
+
+-- 📻 RADIO RARITY — 1 in 1000 per eligible spawn point
 local RADIO_CHANCE = 1 / 1000
 
+-- ⚙️ SETTINGS ------------------------------------------------------------
 local function ComputeSharedSeed()
     local jid = tostring(game.JobId or "")
-    if jid == "" or jid == "-1" or jid == "0" then
-        return 20250601
-    end
+    if jid == "" or jid == "-1" or jid == "0" then return 20250601 end
     local h = 2166136261
     for i = 1, #jid do
         h = (h * 16777619 + jid:byte(i)) % 4294967296
     end
     return (h % 999983) + 1
 end
-
 local SEED = ComputeSharedSeed()
 
 local CHUNK_SIZE = 60
 local WALL_HEIGHT = 12
 local WALL_SPACING = 15
 local WALL_H = WALL_HEIGHT + 1
+
 local FOV = 90
+local TELEPORT_TO_START = true
+
 local RENDER_RADIUS = IS_MOBILE and 5 or 7
 local UNLOAD_RADIUS = RENDER_RADIUS + 2
 local BUILD_PER_FRAME = IS_MOBILE and 3 or 4
 local BUILD_TIME_BUDGET = (IS_MOBILE and 4 or 6) / 1000
+
 local LEVEL_2_DISTANCE = 12
 local LEVEL_3_DISTANCE = 18
+
 local EDGE_WALL_EPS = 0.07
 local DOORWAY_CHANCE = 0.10
+
 local DUST_RATE = IS_MOBILE and 2 or 6
 
+-- 🎮 GAMEPLAY
 local FLASHLIGHT_KEY = Enum.KeyCode.F
 local SPRINT_KEY = Enum.KeyCode.LeftShift
 local BASE_WALKSPEED = 16
@@ -85,31 +84,35 @@ local STAMINA_DRAIN = 18
 local STAMINA_REGEN = 16
 local EXHAUST_BREATH_AT = 35
 
+-- 👁️ MONSTER (dark level only)
 local MAX_EYE_MONSTERS = 2
 local EYE_MONSTER_SPEED = 20
 local EYE_MONSTER_KILL_RANGE = 5
 local EYE_MONSTER_SPAWN_GRACE = 2
 local LIGHT_SAFE_RADIUS = 13
 
-local AUDIO_LEVEL_0 = "rbxassetid://9103284660"
-local AUDIO_LEVEL_2 = "rbxassetid://108024152237216"
-local AUDIO_LEVEL_3 = "rbxassetid://77926761607662"
-local FOOTSTEP_ID = "rbxassetid://82451786993797"
-local THUMP_ID = "rbxassetid://3436368446"
+-- AUDIO IDS
+local AUDIO_LEVEL_0 = "rbxassetid://9103284660"    -- fluorescent buzz
+local AUDIO_LEVEL_2 = "rbxassetid://108024152237216" -- Level 2 Pipe Dreams
+local AUDIO_LEVEL_3 = "rbxassetid://77926761607662"  -- DREAMCORE Fever Dream
+local FOOTSTEP_ID = "rbxassetid://82451786993797"    -- walking on carpet
+local THUMP_ID = "rbxassetid://3436368446"            -- deep thumps (heartbeat/impacts)
 local CREAK_ID = "rbxassetid://9112613298"
 local RADIO_SONGS = {
-    "rbxassetid://120812539198119",
-    "rbxassetid://94711191029320",
+    "rbxassetid://120812539198119", -- Memories
+    "rbxassetid://94711191029320",  -- a backrooms lullaby
 }
 
-local TEX_WALL_0 = "rbxassetid://10514707910"
-local TEX_WALL_0_FALLBACK = "rbxassetid://1235086010"
+-- TEXTURES
+local TEX_WALL_0 = "rbxassetid://10514707910"    -- BackRooms Wall (level 1)
+local TEX_WALL_0_FALLBACK = "rbxassetid://1235086010" -- old wallpaper (auto-used if the new one fails)
 local TEX_WALL_DREAM = "rbxassetid://1235086010"
 local TEX_FLOOR_0 = "rbxassetid://6705712153"
 local TEX_WALL_2 = "rbxassetid://914394986"
 local TEX_FLOOR_2 = "rbxassetid://111265053"
 local EYE_IMAGE = "rbxassetid://2750418580"
 
+-- resolved at startup (verified against real content loading)
 local WallTex = { Current = TEX_WALL_0 }
 
 local DREAM_PASTELS = {
@@ -122,13 +125,12 @@ local DREAM_PASTELS = {
 
 local EYE_SPAWN_CHANCE = 0.02
 
+-- 🧠 SHARED STATE
 local HiveMind = {
     PlayerPos = Vector3.new(0, 0, 0),
     PlayerVelocity = Vector3.zero,
-    CurrentLevel = 0,
-    DistFromCenter = 0,
+    CurrentLevel = 0
 }
-
 local Stamina = { Value = MAX_STAMINA }
 local Blackout = false
 local Sprinting = false
@@ -147,20 +149,17 @@ local dofEffect = nil
 local litLights = {}
 local FootstepSounds = {}
 local lastAcousticLevel = -1
-local sounds = {}
-local heartbeatSound = nil
-local currentReverb = "Sewer"
 
 local function UpdateHiveMind()
-    local character = Player.Character
-    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local char = Player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
     if root then
         HiveMind.PlayerPos = root.Position
         HiveMind.PlayerVelocity = root.Velocity
-        HiveMind.DistFromCenter = math.sqrt(root.Position.X * root.Position.X + root.Position.Z * root.Position.Z)
     end
 end
 
+-- 💡 LIGHT SAFETY
 local function RegisterLit(key, pos, light)
     litLights[key] = litLights[key] or {}
     table.insert(litLights[key], { Pos = pos, Light = light })
@@ -175,9 +174,9 @@ local function GetPlayerLightSafety()
         for dz = -1, 1 do
             local list = litLights[(ccx + dx) .. "_" .. (ccz + dz)]
             if list then
-                for _, entry in ipairs(list) do
-                    if entry.Light.Parent and entry.Light.Brightness > 0.35 then
-                        local horiz = Vector3.new(entry.Pos.X - p.X, 0, entry.Pos.Z - p.Z).Magnitude
+                for _, e in ipairs(list) do
+                    if e.Light.Parent and e.Light.Brightness > 0.35 then
+                        local horiz = Vector3.new(e.Pos.X - p.X, 0, e.Pos.Z - p.Z).Magnitude
                         if horiz < LIGHT_SAFE_RADIUS then
                             return true
                         end
@@ -189,6 +188,7 @@ local function GetPlayerLightSafety()
     return false
 end
 
+-- 🔊 SOUND HELPERS -------------------------------------------------------
 local function addEQ(s, lo, mid, hi)
     local eq = Instance.new("EqualizerSoundEffect")
     eq.LowGain = lo
@@ -196,6 +196,25 @@ local function addEQ(s, lo, mid, hi)
     eq.HighGain = hi
     eq.Parent = s
     return eq
+end
+
+local occlusionParams = RaycastParams.new()
+occlusionParams.FilterType = Enum.RaycastFilterType.Exclude
+
+-- muffle a sound when a wall sits between it and the camera (one ray per sound)
+local function ApplyOcclusion(s, pos, maxDist)
+    local camPos = Camera.CFrame.Position
+    local offset = pos - camPos
+    local dist = offset.Magnitude
+    if dist < 6 or dist > (maxDist or 120) then return end
+    occlusionParams.FilterDescendantsInstances = { Player.Character }
+    local hit = Workspace:Raycast(camPos, offset, occlusionParams)
+    if not hit or (hit.Position - pos).Magnitude <= 2 then return end
+    local f = math.clamp(dist / 60, 0, 1)
+    local eq = s:FindFirstChildOfClass("EqualizerSoundEffect") or addEQ(s, 0, 0, 0)
+    eq.HighGain = eq.HighGain - (6 + 14 * f)
+    eq.MidGain = eq.MidGain - (2 + 4 * f)
+    s.Volume = s.Volume * (1 - 0.3 * f)
 end
 
 local function PlayAt(pos, id, vol, speed, maxDist, lifetime, eqLo, eqMid, eqHi)
@@ -208,7 +227,6 @@ local function PlayAt(pos, id, vol, speed, maxDist, lifetime, eqLo, eqMid, eqHi)
     holder.Size = Vector3.new(1, 1, 1)
     holder.Position = pos
     holder.Parent = Workspace
-
     local s = Instance.new("Sound")
     s.SoundId = id
     s.Volume = vol * MASTER
@@ -216,9 +234,8 @@ local function PlayAt(pos, id, vol, speed, maxDist, lifetime, eqLo, eqMid, eqHi)
     s.RollOffMode = Enum.RollOffMode.InverseTapered
     s.RollOffMaxDistance = maxDist or 120
     pcall(function() s.RollOffMinDistance = 10 end)
-    if eqLo then
-        addEQ(s, eqLo, eqMid or 0, eqHi or 0)
-    end
+    if eqLo then addEQ(s, eqLo, eqMid or 0, eqHi or 0) end
+    pcall(ApplyOcclusion, s, pos, maxDist)
     s.Parent = holder
     s:Play()
     Debris:AddItem(holder, lifetime or 8)
@@ -226,7 +243,7 @@ local function PlayAt(pos, id, vol, speed, maxDist, lifetime, eqLo, eqMid, eqHi)
 end
 
 local function PlayScream()
-    for i, p in ipairs({0.5, 0.36, 0.62}) do
+    for i, p in ipairs({ 0.5, 0.36, 0.62 }) do
         task.delay((i - 1) * 0.04, function()
             local s = Instance.new("Sound")
             s.SoundId = CREAK_ID
@@ -243,21 +260,18 @@ local function PlayScream()
     end
 end
 
+local sounds = {}
+local heartbeatSound = nil
+
+-- voice chat processing
 local REVERB_PRESETS = {
     Cave = Enum.ReverbType.Cave,
     Hall = Enum.ReverbType.ConcertHall,
     Arena = Enum.ReverbType.Arena,
     Room = Enum.ReverbType.Room,
     Sewer = Enum.ReverbType.SewerPipe,
-    NoReverb = Enum.ReverbType.NoReverb,
+    NoReverb = Enum.ReverbType.NoReverb
 }
-
-local function applyReverb(reverbType)
-    if REVERB_PRESETS[reverbType] then
-        SoundService.AmbientReverb = REVERB_PRESETS[reverbType]
-        currentReverb = reverbType
-    end
-end
 
 local function applyVoiceEffects(s)
     if not s:IsA("Sound") then return end
@@ -265,7 +279,6 @@ local function applyVoiceEffects(s)
         local e = s:FindFirstChild(n)
         if e then e:Destroy() end
     end
-
     local echo = Instance.new("EchoSoundEffect")
     echo.Name = "BRVoiceEcho"
     echo.DelayTime = 0.09
@@ -273,14 +286,12 @@ local function applyVoiceEffects(s)
     echo.WetLevel = 0.7
     echo.DryLevel = 0.7
     echo.Parent = s
-
     local eq = Instance.new("EqualizerSoundEffect")
     eq.Name = "BRVoiceEQ"
     eq.LowGain = 2
     eq.MidGain = 0.5
     eq.HighGain = -3
     eq.Parent = s
-
     local rev = Instance.new("ReverbSoundEffect")
     rev.Name = "BRVoiceReverb"
     rev.DecayTime = 3.5
@@ -289,7 +300,6 @@ local function applyVoiceEffects(s)
     rev.Density = 1
     rev.Diffusion = 1
     rev.Parent = s
-
     pcall(function()
         local pit = Instance.new("PitchShiftSoundEffect")
         pit.Name = "BRVoicePitch"
@@ -302,16 +312,24 @@ local function IsVoiceChatSound(s)
     return s:IsA("Sound") and s.Name:sub(1, 10) == "VoiceSound"
 end
 
+local currentReverb = "Sewer"
+local function applyReverb(reverbType)
+    if REVERB_PRESETS[reverbType] then
+        SoundService.AmbientReverb = REVERB_PRESETS[reverbType]
+        currentReverb = reverbType
+    end
+end
+
+-- 🦶 FOOTSTEPS: auto-detects single-step vs walking-loop asset
 local function UpdateFootstepAcoustics(lvl)
     local lo, mid, hi
     if lvl == 0 then
-        lo, mid, hi = 2, 1, -3
+        lo, mid, hi = 2, 1, -3   -- carpet: soft, warm
     elseif lvl == 1 then
-        lo, mid, hi = -2, 2, 4
+        lo, mid, hi = -2, 2, 4   -- concrete: sharp, hard
     else
-        lo, mid, hi = 4, 0, -5
+        lo, mid, hi = 4, 0, -5   -- dreamcore: muffled
     end
-
     for _, fx in ipairs(FootstepSounds) do
         if fx.S.Parent then
             fx.eq.LowGain = lo
@@ -326,10 +344,10 @@ local function SetupFootsteps(char)
         local root = char:WaitForChild("HumanoidRootPart", 10)
         if not root or not RUNNING then return end
         if root:FindFirstChild("BRFootstepsL") or root:FindFirstChild("BRWalkLoop") then return end
-
         local hum = char:FindFirstChildOfClass("Humanoid")
         if not hum then return end
 
+        -- measure the carpet asset: single step or walking loop?
         local isLoopAsset = false
         do
             local probe = Instance.new("Sound")
@@ -349,6 +367,7 @@ local function SetupFootsteps(char)
             probe:Destroy()
         end
 
+        -- landing impact (deep thump)
         local land = Instance.new("Sound")
         land.Name = "BRLand"
         land.SoundId = THUMP_ID
@@ -406,6 +425,7 @@ local function SetupFootsteps(char)
             return
         end
 
+        -- STEP MODE: single-step asset — L/R alternate + scuff
         local function makeStep(name)
             local s = Instance.new("Sound")
             s.Name = name
@@ -415,7 +435,6 @@ local function SetupFootsteps(char)
             s.Parent = root
             return s, eq
         end
-
         table.clear(FootstepSounds)
         local fsL, e1 = makeStep("BRFootstepsL")
         local fsR, e2 = makeStep("BRFootstepsR")
@@ -572,8 +591,7 @@ local function SetupAudio()
             local pos = Vector3.new(
                 camPos.X + math.cos(angle) * dist,
                 WALL_HEIGHT * (0.4 + math.random() * 0.5),
-                camPos.Z + math.sin(angle) * dist
-            )
+                camPos.Z + math.sin(angle) * dist)
             local muf = math.clamp(1 - dist / 160, 0, 1)
             local lo = 4 + (1 - muf) * 4
             local hi = -4 - (1 - muf) * 8
@@ -611,6 +629,7 @@ local function SetupAudio()
     end)
 end
 
+-- 🌫️ ATMOSPHERE ---------------------------------------------------------
 local function UpdateAtmosphere(distFromCenter)
     if not (sounds.Lvl0 and sounds.Lvl2 and sounds.Lvl3) then return end
 
@@ -626,7 +645,6 @@ local function UpdateAtmosphere(distFromCenter)
         local c2 = Color3.fromRGB(22, 23, 30)
         local c3 = Color3.fromRGB(236, 228, 250)
         atmosphereEffect.Color = c1:Lerp(c2, alpha2):Lerp(c3, alpha3)
-
         local d1 = Color3.fromRGB(118, 108, 72)
         local d2 = Color3.fromRGB(7, 7, 9)
         local d3 = Color3.fromRGB(186, 182, 208)
@@ -634,16 +652,12 @@ local function UpdateAtmosphere(distFromCenter)
         atmosphereEffect.Density = 0.28 + alpha2 * 0.30 - alpha3 * 0.10
         atmosphereEffect.Haze = 1.0 + alpha2 * 1.3 + alpha3 * 0.8
         atmosphereEffect.Glare = alpha3 * 0.2
-
-        if sunRaysEffect then
-            sunRaysEffect.Intensity = alpha3 * 0.3
-        end
+        if sunRaysEffect then sunRaysEffect.Intensity = alpha3 * 0.3 end
     else
         local color1 = Color3.fromRGB(198, 188, 146)
         local color2 = Color3.fromRGB(24, 25, 32)
         local colorD = Color3.fromRGB(230, 222, 248)
         Lighting.FogColor = color1:Lerp(color2, alpha2):Lerp(colorD, alpha3)
-
         local baseFog = RENDER_RADIUS * CHUNK_SIZE - 30
         local fogEnd = baseFog * (1 - alpha2 * 0.45)
         fogEnd = fogEnd + alpha3 * (baseFog * 1.15 - fogEnd)
@@ -651,6 +665,7 @@ local function UpdateAtmosphere(distFromCenter)
         Lighting.FogStart = 50 - alpha2 * 24 + alpha3 * 70
     end
 
+    -- L1 brighter/warmer, L2 deeper dark (more contrast), L3 airy
     local amb = Color3.fromRGB(112, 105, 86)
         :Lerp(Color3.fromRGB(10, 11, 17), alpha2)
         :Lerp(Color3.fromRGB(200, 196, 210), alpha3)
@@ -671,7 +686,6 @@ local function UpdateAtmosphere(distFromCenter)
         ccEffect.Brightness = 0.01 - alpha2 * 0.10 + alpha3 * 0.14
         ccEffect.Saturation = -0.03 - alpha2 * 0.28 + alpha3 * 0.5
         ccEffect.Contrast = 0.04 + alpha2 * 0.08
-
         local tint1 = Color3.fromRGB(255, 251, 240)
         local tint2 = Color3.fromRGB(228, 234, 250)
         local t3
@@ -710,9 +724,10 @@ local function UpdateAtmosphere(distFromCenter)
     local wantReverb = (HiveMind.CurrentLevel == 2 and "Hall")
         or (HiveMind.CurrentLevel == 1 and "Cave")
         or "Sewer"
-    if wantReverb ~= currentReverb then applyReverb(wantReverb) end
+    if HiveMind.CurrentLevel ~= 0 and wantReverb ~= currentReverb then applyReverb(wantReverb) end
 end
 
+-- 🎨 GRAPHICS -------------------------------------------------------------
 local function SetupGraphics()
     Lighting.Ambient = Color3.fromRGB(108, 100, 80)
     Lighting.OutdoorAmbient = Color3.fromRGB(120, 111, 86)
@@ -721,24 +736,25 @@ local function SetupGraphics()
     Lighting.ClockTime = 12
     pcall(function() Lighting.Technology = IS_MOBILE and Enum.Technology.ShadowMap or Enum.Technology.Future end)
     pcall(function() Lighting.ExposureCompensation = 0.1 end)
-    pcall(function() Lighting.ShadowSoftness = 0.25 end)
-    pcall(function() Lighting.EnvironmentDiffuseScale = 0.85 end)
-    pcall(function() Lighting.EnvironmentSpecularScale = 0.6 end)
+    pcall(function() Lighting.ShadowSoftness = 0.4 end)
+    pcall(function() Lighting.EnvironmentDiffuseScale = 0.65 end)
+    pcall(function() Lighting.EnvironmentSpecularity = 0.45 end)
+
     Lighting.FogStart = 50
     Lighting.FogEnd = RENDER_RADIUS * CHUNK_SIZE - 30
     Lighting.FogColor = Color3.fromRGB(198, 188, 146)
 
-    for _, name in ipairs({"BR_CC", "BR_Bloom", "BR_Atmos", "BR_SunRays", "BR_Blur", "BR_Hurt", "BR_Sky", "BR_DOF"}) do
-        local e = Lighting:FindFirstChild(name)
+    for _, n in ipairs({"BR_CC", "BR_Bloom", "BR_Atmos", "BR_SunRays", "BR_Blur", "BR_Hurt", "BR_Sky", "BR_DOF"}) do
+        local e = Lighting:FindFirstChild(n)
         if e then e:Destroy() end
     end
 
     local cc = Instance.new("ColorCorrectionEffect")
     cc.Name = "BR_CC"
     cc.TintColor = Color3.fromRGB(255, 251, 240)
-    cc.Contrast = 0.06
-    cc.Saturation = -0.05
-    cc.Brightness = 0.02
+    cc.Contrast = 0.04
+    cc.Saturation = -0.03
+    cc.Brightness = 0.01
     cc.Parent = Lighting
     ccEffect = cc
 
@@ -758,9 +774,9 @@ local function SetupGraphics()
     if not IS_MOBILE then
         local bloom = Instance.new("BloomEffect")
         bloom.Name = "BR_Bloom"
-        bloom.Intensity = 0.55
-        bloom.Size = 30
-        bloom.Threshold = 0.9
+        bloom.Intensity = 0.25
+        bloom.Size = 20
+        bloom.Threshold = 1.02
         bloom.Parent = Lighting
 
         local blur = Instance.new("BlurEffect")
@@ -800,6 +816,7 @@ local function SetupGraphics()
     Camera.FieldOfView = FOV
 end
 
+-- 🧰 PROP HELPERS ---------------------------------------------------------
 local function Ghost(p)
     p.Anchored = true
     p.CanCollide = false
@@ -818,24 +835,42 @@ end
 
 local function JitterColor(c, amt, rng)
     local j = 1 + (rng() - 0.5) * amt
-    return Color3.new(
-        math.clamp(c.R * j, 0, 1),
-        math.clamp(c.G * j, 0, 1),
-        math.clamp(c.B * j, 0, 1)
-    )
+    return Color3.new(math.clamp(c.R * j, 0, 1), math.clamp(c.G * j, 0, 1), math.clamp(c.B * j, 0, 1))
 end
+
+-- per-chunk texture variation, set at the start of each chunk build
+local TexVar = nil
 
 local function ApplyTexture(part, textureId, face, color, studs, trans)
     local texture = Instance.new("Texture")
     texture.Texture = textureId
     texture.Face = face
-    texture.StudsPerTileU = studs or 9
-    texture.StudsPerTileV = studs or 9
+    local u, v = studs or 9, studs or 9
+    if TexVar then
+        u, v = u * TexVar.U, v * TexVar.V
+        color = JitterColor(color, TexVar.Tint, TexVar.Rng)
+    end
+    texture.StudsPerTileU = u
+    texture.StudsPerTileV = v
     texture.Transparency = trans or 0
     texture.Parent = part
     part.Color = color
+    -- subtle dirt / stain layer on level 0 carpet and walls
+    if TexVar and TexVar.Dirt and TexVar.Rng() < (IS_MOBILE and 0.12 or 0.3) then
+        local dirt = Instance.new("Texture")
+        dirt.Texture = textureId
+        dirt.Face = face
+        dirt.StudsPerTileU = u * (1.6 + TexVar.Rng())
+        dirt.StudsPerTileV = v * (1.6 + TexVar.Rng())
+        dirt.OffsetStudsU = TexVar.Rng() * u
+        dirt.OffsetStudsV = TexVar.Rng() * v
+        dirt.Color3 = Color3.fromRGB(96, 72, 44)
+        dirt.Transparency = 0.84 + TexVar.Rng() * 0.08
+        dirt.Parent = part
+    end
 end
 
+-- 🗺️ MAP GENERATION -------------------------------------------------------
 local MapFolder = Instance.new("Folder")
 MapFolder.Name = "DreamcoreMap"
 MapFolder.Parent = Workspace
@@ -902,7 +937,6 @@ local function CreateDoorway(parent, alongZ, worldX, worldZ, wTex, wCol, materia
         end
         p.Parent = parent
     end
-
     piece(sideL, -(gap / 2 + sideL / 2))
     piece(sideR, (gap / 2 + sideR / 2))
 
@@ -923,7 +957,7 @@ local function CreateDoorway(parent, alongZ, worldX, worldZ, wTex, wCol, materia
     end
     head.Parent = parent
 
-    for _, s in ipairs({-1, 1}) do
+    for _, s in ipairs({ -1, 1 }) do
         local trim = Instance.new("Part")
         Ghost(trim)
         trim.Material = Enum.Material.Wood
@@ -939,6 +973,7 @@ local function CreateDoorway(parent, alongZ, worldX, worldZ, wTex, wCol, materia
     end
 end
 
+-- 🏢 SOLID DROP CEILING — varied real-world tube temps + aged diffusers
 local function CreateCeilingTile(chunk, data, x, z, level, gx, gz, rng)
     local isLightTile = (gx % 2 == 0) and (gz % 2 == 0)
 
@@ -968,237 +1003,2161 @@ local function CreateCeilingTile(chunk, data, x, z, level, gx, gz, rng)
         st.Parent = chunk
     end
 
-    if isLightTile then
-        local lightPanel = Instance.new("Part")
-        lightPanel.Name = "BRLightPanel"
-        lightPanel.Size = Vector3.new(11, 0.2, 5)
-        lightPanel.Position = Vector3.new(x, WALL_HEIGHT - 0.08, z)
-        Ghost(lightPanel)
-        lightPanel.Material = Enum.Material.Neon
-        lightPanel.Color = Color3.fromRGB(232, 231, 220)
-        lightPanel.Parent = chunk
-
-        local light = Instance.new("PointLight")
-        light.Color = level == 2 and Color3.fromRGB(190, 205, 255) or Color3.fromRGB(245, 239, 220)
-        light.Range = 34
-        light.Brightness = level == 2 and 1.1 or 1.8
-        light.Shadows = not IS_MOBILE
-        light.Parent = lightPanel
-
-        local key = tostring(math.floor(x / CHUNK_SIZE + 0.5)) .. "_" .. tostring(math.floor(z / CHUNK_SIZE + 0.5))
-        RegisterLit(key, lightPanel.Position, light)
+    if not isLightTile then
+        local r = rng()
+        if r < 0.05 then
+            local sp = Instance.new("Part")
+            sp.Shape = Enum.PartType.Cylinder
+            sp.Size = Vector3.new(0.4, 0.5, 0.5)
+            sp.CFrame = CFrame.new(x, WALL_HEIGHT - 0.2, z) * CFrame.Angles(0, 0, math.rad(90))
+            Ghost(sp)
+            sp.Material = Enum.Material.Metal
+            sp.Color = Color3.fromRGB(150, 148, 140)
+            sp.Parent = chunk
+        elseif r < 0.09 then
+            local sk = Instance.new("Part")
+            sk.Shape = Enum.PartType.Cylinder
+            sk.Size = Vector3.new(0.12, 1.6, 1.6)
+            sk.CFrame = CFrame.new(x, WALL_HEIGHT - 0.05, z) * CFrame.Angles(0, 0, math.rad(90))
+            Ghost(sk)
+            sk.Material = Enum.Material.SmoothPlastic
+            sk.Color = Color3.fromRGB(60, 60, 60)
+            sk.Parent = chunk
+            local grill = Instance.new("Part")
+            grill.Shape = Enum.PartType.Cylinder
+            grill.Size = Vector3.new(0.06, 1.9, 1.9)
+            grill.CFrame = sk.CFrame * CFrame.new(-0.06, 0, 0)
+            Ghost(grill)
+            grill.Material = Enum.Material.DiamondPlate
+            grill.Color = Color3.fromRGB(45, 45, 45)
+            grill.Parent = chunk
+        elseif r < 0.12 then
+            local gr = Instance.new("Part")
+            gr.Size = Vector3.new(6, 0.25, 3)
+            gr.Position = Vector3.new(x, WALL_HEIGHT - 0.05, z)
+            Ghost(gr)
+            gr.Material = Enum.Material.DiamondPlate
+            gr.Color = Color3.fromRGB(95, 93, 88)
+            gr.Parent = chunk
+        end
+        return
     end
 
-    return tile
+    if dark then return end
+
+    local roll = rng()
+    local deadChance = (level == 2 and 0.45) or 0.015
+    local faultyChance = (level == 2 and 0.30) or 0.05
+    local dead = roll < deadChance
+    local faulty = (not dead) and roll < deadChance + faultyChance
+
+    local panel = Instance.new("Part")
+    Ghost(panel)
+    panel.Size = Vector3.new(11, 0.25, 5.5)
+    panel.Position = Vector3.new(x, WALL_HEIGHT - 0.05, z)
+    panel.Material = dead and Enum.Material.SmoothPlastic or Enum.Material.Neon
+    if dead then
+        panel.Color = level == 2 and Color3.fromRGB(66, 68, 74) or Color3.fromRGB(150, 145, 130)
+    else
+        if level == 2 then
+            panel.Color = JitterColor(Color3.fromRGB(160, 175, 205), 0.10, rng)
+        else
+            local age = rng()
+            if age < 0.2 then
+                panel.Color = Color3.fromRGB(248, 238, 204) -- yellowed old diffuser
+            else
+                panel.Color = JitterColor(Color3.fromRGB(255, 250, 226), 0.05, rng)
+            end
+        end
+    end
+    panel.Parent = chunk
+
+    if not IS_MOBILE then
+        for _, d in ipairs({ Vector3.new(0, 0, 2.9), Vector3.new(0, 0, -2.9) }) do
+            local f = Instance.new("Part")
+            f.Size = Vector3.new(11.6, 0.18, 0.3)
+            f.Position = Vector3.new(x, WALL_HEIGHT - 0.12, z) + d
+            Ghost(f)
+            f.Material = Enum.Material.Metal
+            f.Color = Color3.fromRGB(168, 166, 158)
+            f.Parent = chunk
+        end
+        for _, d in ipairs({ Vector3.new(5.7, 0, 0), Vector3.new(-5.7, 0, 0) }) do
+            local f = Instance.new("Part")
+            f.Size = Vector3.new(0.3, 0.18, 6.1)
+            f.Position = Vector3.new(x, WALL_HEIGHT - 0.12, z) + d
+            Ghost(f)
+            f.Material = Enum.Material.Metal
+            f.Color = Color3.fromRGB(168, 166, 158)
+            f.Parent = chunk
+        end
+    end
+
+    if dead then return end
+
+    local light = Instance.new("PointLight")
+    light.Shadows = not IS_MOBILE
+    if level == 2 then
+        light.Color = Color3.fromRGB(196, 210, 245)
+        light.Range = 26
+        light.Brightness = 1.0
+    else
+        -- real fluorescent installs vary: some warm/aging, most neutral
+        local t = rng()
+        if t < 0.15 then
+            light.Color = Color3.fromRGB(255, 232, 182)   -- aging warm tube
+        elseif t < 0.25 then
+            light.Color = Color3.fromRGB(244, 248, 255)   -- cool replacement tube
+        else
+            light.Color = Color3.fromRGB(255, 247, 216)
+        end
+        light.Range = 34
+        light.Brightness = 1.45
+    end
+    light.Parent = panel
+
+    table.insert(data.Lights, { Light = light, Base = light.Brightness })
+    RegisterLit(data.Key, panel.Position, light)
+
+    local buzz, buzzVol = nil, 0
+    if not data.HasBuzz then
+        data.HasBuzz = true
+        buzz = Instance.new("Sound")
+        buzz.SoundId = AUDIO_LEVEL_0
+        buzzVol = (0.5 + rng() * 0.15) * MASTER
+        buzz.Volume = buzzVol
+        buzz.PlaybackSpeed = 0.97 + rng() * 0.06
+        buzz.Looped = true
+        buzz.RollOffMode = Enum.RollOffMode.InverseTapered
+        buzz.RollOffMaxDistance = 60
+        pcall(function() buzz.RollOffMinDistance = 8 end)
+        buzz.Parent = panel
+        buzz:Play()
+        table.insert(data.Buzzes, { S = buzz, V = buzzVol, P = buzz.PlaybackSpeed })
+    end
+
+    if faulty then
+        local base = light.Brightness
+        local setBuzz = function(b, vol)
+            if buzz then
+                buzz.Volume = buzzVol * math.clamp(b / base, 0, 1) * vol
+            end
+        end
+        local function set(b)
+            light.Brightness = b
+            setBuzz(b, 1)
+        end
+        task.spawn(function()
+            -- brief warm-up flicker when the tube first strikes
+            for _ = 1, math.random(3, 6) do
+                if not (RUNNING and panel.Parent and light.Parent) then return end
+                set(math.random() < 0.5 and 0.03 or base * (0.4 + math.random() * 0.4))
+                task.wait(0.03 + math.random() * 0.08)
+            end
+            local dimPhase = math.random() * 100
+            local nextBurst = os.clock() + 1 + math.random() * 5
+            while RUNNING and panel.Parent and light.Parent do
+                if Blackout then
+                    light.Brightness = 0
+                    if buzz then buzz.Volume = 0 end
+                    task.wait(0.15)
+                else
+                    -- slow dying-tube dim
+                    local dim = 0.72 + 0.28 * (0.5 + 0.5 * math.sin(os.clock() * 0.35 + dimPhase))
+                    local level0 = base * dim
+                    if os.clock() >= nextBurst then
+                        -- stutter burst
+                        for _ = 1, math.random(3, 8) do
+                            if Blackout or not (RUNNING and panel.Parent and light.Parent) then break end
+                            set(math.random() < 0.5 and 0.03 or level0)
+                            if buzz then buzz.PlaybackSpeed = 0.95 + math.random() * 0.1 end
+                            task.wait(0.02 + math.random() * 0.05)
+                        end
+                        nextBurst = os.clock() + 2 + math.random() * 8
+                    else
+                        local on = math.random() > 0.45
+                        set(on and level0 or 0.03)
+                        if buzz then buzz.PlaybackSpeed = 0.95 + math.random() * 0.1 end
+                        task.wait(math.random(4, 35) / 100)
+                    end
+                end
+            end
+        end)
+    end
 end
 
-local function BuildChunk(cx, cz)
-    local chunk = Instance.new("Folder")
-    chunk.Name = string.format("Chunk_%d_%d", cx, cz)
-    chunk.Parent = MapFolder
+-- 📻 FINDABLE RADIO (1 in 1000 — legendary find) -------------------------
+local function CreateRadio(chunk, pos, rng)
+    local songId = RADIO_SONGS[1 + math.floor(rng() * #RADIO_SONGS)]
+    local base = CFrame.new(pos.X, pos.Y + 0.95, pos.Z) * CFrame.Angles(0, rng() * math.pi * 2, 0)
 
-    local data = { Lights = {} }
+    local body = Instance.new("Part")
+    body.Size = Vector3.new(3, 1.8, 1.4)
+    body.CFrame = base
+    Solid(body)
+    body.Material = Enum.Material.Wood
+    body.Color = Color3.fromRGB(82, 52, 34)
+    body.Parent = chunk
+
+    local grill = Instance.new("Part")
+    grill.Size = Vector3.new(1.9, 1.2, 0.1)
+    grill.CFrame = base * CFrame.new(-0.35, 0, 0.76)
+    Ghost(grill)
+    grill.Material = Enum.Material.Fabric
+    grill.Color = Color3.fromRGB(40, 36, 32)
+    grill.Parent = chunk
+
+    for i = 0, 1 do
+        local knob = Instance.new("Part")
+        knob.Shape = Enum.PartType.Cylinder
+        knob.Size = Vector3.new(0.15, 0.3, 0.3)
+        knob.CFrame = base * CFrame.new(1.05, -0.25 + i * 0.5, 0.78) * CFrame.Angles(0, 0, math.rad(90))
+        Ghost(knob)
+        knob.Material = Enum.Material.SmoothPlastic
+        knob.Color = Color3.fromRGB(210, 190, 160)
+        knob.Parent = chunk
+    end
+
+    local ant = Instance.new("Part")
+    ant.Shape = Enum.PartType.Cylinder
+    ant.Size = Vector3.new(2.6, 0.06, 0.06)
+    ant.CFrame = base * CFrame.new(1.1, 1.6, -0.4) * CFrame.Angles(0, 0, math.rad(35))
+    Ghost(ant)
+    ant.Material = Enum.Material.Metal
+    ant.Color = Color3.fromRGB(180, 180, 185)
+    ant.Parent = chunk
+
+    local dial = Instance.new("Part")
+    dial.Size = Vector3.new(0.5, 0.18, 0.06)
+    dial.CFrame = base * CFrame.new(0.6, 0.55, 0.73)
+    Ghost(dial)
+    dial.Material = Enum.Material.Neon
+    dial.Color = Color3.fromRGB(255, 190, 110)
+    dial.Parent = chunk
+    local dl = Instance.new("PointLight")
+    dl.Color = Color3.fromRGB(255, 200, 130)
+    dl.Range = 8
+    dl.Brightness = 0.5
+    dl.Parent = dial
+
+    local song = Instance.new("Sound")
+    song.SoundId = songId
+    song.Volume = 0.55 * MASTER
+    song.Looped = true
+    song.RollOffMode = Enum.RollOffMode.InverseTapered
+    song.RollOffMaxDistance = 140
+    pcall(function() song.RollOffMinDistance = 14 end)
+    addEQ(song, -5, 4, 3)
+    song.Parent = body
+    song:Play()
+
+    local stat = Instance.new("Sound")
+    stat.SoundId = AUDIO_LEVEL_0
+    stat.Volume = 0.06 * MASTER
+    stat.PlaybackSpeed = 1.35
+    stat.Looped = true
+    stat.RollOffMode = Enum.RollOffMode.InverseTapered
+    stat.RollOffMaxDistance = 60
+    pcall(function() stat.RollOffMinDistance = 8 end)
+    stat.Parent = body
+    stat:Play()
+end
+
+-- 🧾 SMALL REALISTIC PROPS -----------------------------------------------
+local function CreatePaper(chunk, pos, rng)
+    local p = Instance.new("Part")
+    p.Size = Vector3.new(1.2, 0.05, 1.6)
+    p.CFrame = CFrame.new(pos.X, 0.06, pos.Z) * CFrame.Angles(0, rng() * math.pi * 2, 0)
+    Ghost(p)
+    p.Material = Enum.Material.SmoothPlastic
+    p.Color = JitterColor(Color3.fromRGB(228, 223, 205), 0.1, rng)
+    p.Parent = chunk
+end
+
+local function CreatePuddle(chunk, x, z, rng)
+    local p = Instance.new("Part")
+    p.Shape = Enum.PartType.Cylinder
+    p.Size = Vector3.new(0.08, 3 + math.floor(rng() * 4), 2 + math.floor(rng() * 4))
+    p.CFrame = CFrame.new(x, 0.05, z) * CFrame.Angles(0, rng() * math.pi, math.rad(90))
+    Ghost(p)
+    p.Material = Enum.Material.Glass
+    p.Color = Color3.fromRGB(32, 38, 48)
+    p.Transparency = 0.15
+    p.Parent = chunk
+end
+
+local function CreateStain(chunk, x, z, rng)
+    local s = Instance.new("Part")
+    s.Shape = Enum.PartType.Cylinder
+    s.Size = Vector3.new(0.06, 3 + math.floor(rng() * 5), 3 + math.floor(rng() * 5))
+    s.CFrame = CFrame.new(x, 0.04, z) * CFrame.Angles(0, rng() * math.pi, math.rad(90))
+    Ghost(s)
+    s.Material = Enum.Material.SmoothPlastic
+    s.Color = Color3.fromRGB(40, 36, 30)
+    s.Transparency = 0.35
+    s.Parent = chunk
+end
+
+local function CreateMolding(chunk, wall)
+    local m = Instance.new("Part")
+    m.Size = Vector3.new(wall.Size.X + 0.3, 0.7, wall.Size.Z + 0.3)
+    m.Position = Vector3.new(wall.Position.X, WALL_HEIGHT - 0.35, wall.Position.Z)
+    Ghost(m)
+    m.Material = Enum.Material.SmoothPlastic
+    m.Color = Color3.fromRGB(188, 178, 140)
+    m.Parent = chunk
+end
+
+local function CreateWires(chunk, pos, rng)
+    for _ = 1, 2 + math.floor(rng() * 2) do
+        local len = 2 + math.floor(rng() * 4)
+        local w = Instance.new("Part")
+        w.Size = Vector3.new(0.12, len, 0.12)
+        w.Position = Vector3.new(pos.X + math.floor(rng() * 7) - 3, WALL_HEIGHT - len / 2 - math.floor(rng() * 2), pos.Z + math.floor(rng() * 7) - 3)
+        Ghost(w)
+        w.Material = Enum.Material.Plastic
+        w.Color = Color3.fromRGB(22, 22, 22)
+        w.Parent = chunk
+    end
+end
+
+local function CreateDebris(chunk, pos, rng)
+    local debris = Instance.new("Part")
+    debris.Size = Vector3.new(1 + math.floor(rng() * 3), 1 + math.floor(rng() * 3), 1 + math.floor(rng() * 3))
+    debris.Position = pos
+    Solid(debris)
+    debris.Material = Enum.Material.Concrete
+    debris.Color = Color3.fromRGB(95, 95, 95)
+    debris.Parent = chunk
+end
+
+-- 🪑 OFFICE PROPS --------------------------------------------------------
+local function CreateOfficeChair(chunk, pos, rng)
+    local yaw = rng() * math.pi * 2
+    local cf = CFrame.new(pos.X, 0, pos.Z) * CFrame.Angles(0, yaw, 0)
+    local base = Instance.new("Part")
+    base.Shape = Enum.PartType.Cylinder
+    base.Size = Vector3.new(0.3, 2.4, 2.4)
+    base.CFrame = cf * CFrame.new(0, 0.3, 0) * CFrame.Angles(0, 0, math.rad(90))
+    Ghost(base)
+    base.Material = Enum.Material.Metal
+    base.Color = Color3.fromRGB(50, 50, 55)
+    base.Parent = chunk
+    local pole = Instance.new("Part")
+    pole.Shape = Enum.PartType.Cylinder
+    pole.Size = Vector3.new(1.1, 0.25, 0.25)
+    pole.CFrame = cf * CFrame.new(0, 0.9, 0) * CFrame.Angles(0, 0, math.rad(90))
+    Ghost(pole)
+    pole.Material = Enum.Material.Metal
+    pole.Color = Color3.fromRGB(70, 70, 75)
+    pole.Parent = chunk
+    local seat = Instance.new("Part")
+    seat.Size = Vector3.new(2.6, 0.4, 2.6)
+    seat.CFrame = cf * CFrame.new(0, 1.5, 0)
+    Ghost(seat)
+    seat.Material = Enum.Material.Fabric
+    seat.Color = Color3.fromRGB(58, 62, 70)
+    seat.Parent = chunk
+    local back = Instance.new("Part")
+    back.Size = Vector3.new(2.6, 2.6, 0.4)
+    back.CFrame = cf * CFrame.new(0, 2.7, -1.1)
+    Ghost(back)
+    back.Material = Enum.Material.Fabric
+    back.Color = Color3.fromRGB(58, 62, 70)
+    back.Parent = chunk
+end
+
+local function CreateDesk(chunk, pos, rng)
+    local yaw = (rng() - 0.5) * 0.3
+    local cf = CFrame.new(pos.X, 0, pos.Z) * CFrame.Angles(0, yaw, 0)
+    local top = Instance.new("Part")
+    top.Size = Vector3.new(6, 0.5, 6)
+    top.CFrame = cf * CFrame.new(0, 2.6, 0)
+    Solid(top)
+    top.Material = Enum.Material.Wood
+    top.Color = Color3.fromRGB(120, 80, 45)
+    top.Parent = chunk
+    for _, d in ipairs({ Vector3.new(0, 0, -2.7), Vector3.new(0, 0, 2.7) }) do
+        local leg = Instance.new("Part")
+        leg.Size = Vector3.new(5.8, 2.4, 0.5)
+        leg.CFrame = cf * CFrame.new(0, 1.2, 0) + d
+        Solid(leg)
+        leg.Material = Enum.Material.Wood
+        leg.Color = Color3.fromRGB(105, 70, 40)
+        leg.Parent = chunk
+    end
+    if rng() < 0.5 then
+        CreatePaper(chunk, pos + Vector3.new(1, 0, 1), rng)
+    end
+end
+
+local function CreateWaterCooler(chunk, pos, rng)
+    local body = Instance.new("Part")
+    body.Size = Vector3.new(1.8, 3.4, 1.8)
+    body.Position = pos + Vector3.new(0, 1.7, 0)
+    Ghost(body)
+    body.Material = Enum.Material.SmoothPlastic
+    body.Color = Color3.fromRGB(225, 226, 228)
+    body.Parent = chunk
+    local bottle = Instance.new("Part")
+    bottle.Shape = Enum.PartType.Ball
+    bottle.Size = Vector3.new(1.5, 1.5, 1.5)
+    bottle.Position = pos + Vector3.new(0, 4.0, 0)
+    Ghost(bottle)
+    bottle.Material = Enum.Material.Glass
+    bottle.Color = Color3.fromRGB(150, 200, 230)
+    bottle.Transparency = 0.35
+    bottle.Parent = chunk
+end
+
+local function CreateFilingCabinet(chunk, pos, rng)
+    local cab = Instance.new("Part")
+    cab.Size = Vector3.new(3, 4.5, 1.8)
+    cab.Position = pos + Vector3.new(0, 2.25, 0)
+    Solid(cab)
+    cab.Material = Enum.Material.Metal
+    cab.Color = Color3.fromRGB(88, 90, 96)
+    cab.Parent = chunk
+    for i = 0, 3 do
+        local drawer = Instance.new("Part")
+        drawer.Size = Vector3.new(2.7, 0.95, 0.15)
+        drawer.CFrame = cab.CFrame * CFrame.new(0, 1.8 - i * 1.05, -0.95)
+        Ghost(drawer)
+        drawer.Material = Enum.Material.Metal
+        drawer.Color = Color3.fromRGB(100, 102, 108)
+        drawer.Parent = chunk
+    end
+end
+
+local function CreateBox(chunk, pos, rng)
+    local s = 2.4 + rng() * 1.2
+    local b = Instance.new("Part")
+    b.Size = Vector3.new(s, s * 0.8, s)
+    b.CFrame = CFrame.new(pos.X, s * 0.4, pos.Z) * CFrame.Angles(0, rng() * math.pi, 0)
+    Solid(b)
+    b.Material = Enum.Material.CorrodedMetal
+    b.Color = JitterColor(Color3.fromRGB(148, 112, 78), 0.15, rng)
+    b.Parent = chunk
+    if rng() < 0.3 then
+        local b2 = Instance.new("Part")
+        b2.Size = Vector3.new(s * 0.7, s * 0.5, s * 0.7)
+        b2.CFrame = CFrame.new(pos.X, s * 0.8 + s * 0.25, pos.Z) * CFrame.Angles(0, rng() * math.pi, 0)
+        Solid(b2)
+        b2.Material = Enum.Material.CorrodedMetal
+        b2.Color = JitterColor(Color3.fromRGB(140, 105, 72), 0.15, rng)
+        b2.Parent = chunk
+    end
+end
+
+local function CreateCoffeeCup(chunk, pos, rng)
+    local tipped = rng() < 0.4
+    local cup = Instance.new("Part")
+    cup.Shape = Enum.PartType.Cylinder
+    cup.Size = Vector3.new(0.7, 0.5, 0.5)
+    local base = CFrame.new(pos.X, tipped and 0.25 or 0.55, pos.Z)
+    if tipped then
+        base = base * CFrame.Angles(0, rng() * math.pi, math.rad(90))
+        local st = Instance.new("Part")
+        st.Shape = Enum.PartType.Cylinder
+        st.Size = Vector3.new(0.03, 1.6, 1.2)
+        st.CFrame = CFrame.new(pos.X + 0.6, 0.035, pos.Z) * CFrame.Angles(0, rng() * math.pi, math.rad(90))
+        Ghost(st)
+        st.Material = Enum.Material.SmoothPlastic
+        st.Color = Color3.fromRGB(64, 48, 32)
+        st.Transparency = 0.3
+        st.Parent = chunk
+    else
+        base = base * CFrame.Angles(0, 0, math.rad(90))
+    end
+    cup.CFrame = base
+    Ghost(cup)
+    cup.Material = Enum.Material.SmoothPlastic
+    cup.Color = Color3.fromRGB(235, 232, 224)
+    cup.Parent = chunk
+end
+
+local function CreateWetFloorSign(chunk, pos, rng)
+    local yaw = rng() * math.pi * 2
+    local cf = CFrame.new(pos.X, 0, pos.Z) * CFrame.Angles(0, yaw, 0)
+    for _, s in ipairs({ -1, 1 }) do
+        local panel = Instance.new("Part")
+        panel.Size = Vector3.new(2.4, 0.12, 3)
+        panel.CFrame = cf * CFrame.new(s * 0.55, 1.45, 0) * CFrame.Angles(0, 0, s * math.rad(21))
+        Ghost(panel)
+        panel.Material = Enum.Material.SmoothPlastic
+        panel.Color = Color3.fromRGB(240, 200, 20)
+        panel.Parent = chunk
+    end
+end
+
+local function CreateOutlet(chunk, wall, alongZ)
+    local o = Instance.new("Part")
+    o.Size = Vector3.new(alongZ and 0.15 or 0.9, 1.4, alongZ and 0.9 or 0.15)
+    local off = alongZ and Vector3.new(0.57, 0, 0) or Vector3.new(0, 0, 0.57)
+    o.CFrame = CFrame.new(wall.Position.X + off.X, 1.9, wall.Position.Z + off.Z)
+    Ghost(o)
+    o.Material = Enum.Material.SmoothPlastic
+    o.Color = Color3.fromRGB(226, 222, 208)
+    o.Parent = chunk
+end
+
+local function CreateLightSwitch(chunk, wall, alongZ)
+    local o = Instance.new("Part")
+    o.Size = Vector3.new(alongZ and 0.12 or 0.9, 1.2, alongZ and 0.9 or 0.12)
+    local off = alongZ and Vector3.new(0.56, 0, 0) or Vector3.new(0, 0, 0.56)
+    o.CFrame = CFrame.new(wall.Position.X + off.X, 3.6, wall.Position.Z + off.Z)
+    Ghost(o)
+    o.Material = Enum.Material.SmoothPlastic
+    o.Color = Color3.fromRGB(228, 224, 210)
+    o.Parent = chunk
+    local t = Instance.new("Part")
+    t.Size = Vector3.new(alongZ and 0.14 or 0.3, 0.45, alongZ and 0.3 or 0.14)
+    t.CFrame = o.CFrame * CFrame.new(0, 0.1, 0) * CFrame.Angles(math.rad(12), 0, 0)
+    Ghost(t)
+    t.Material = Enum.Material.SmoothPlastic
+    t.Color = Color3.fromRGB(200, 196, 184)
+    t.Parent = chunk
+end
+
+local function CreateWallClock(chunk, wall, alongZ, rng)
+    local face = Instance.new("Part")
+    face.Shape = Enum.PartType.Cylinder
+    face.Size = Vector3.new(0.15, 1.4, 1.4)
+    local off = alongZ and Vector3.new(0.62, 0, 0) or Vector3.new(0, 0, 0.62)
+    local cf = CFrame.new(wall.Position.X + off.X, 7.5, wall.Position.Z + off.Z)
+    if alongZ then
+        cf = cf * CFrame.Angles(0, 0, math.rad(90))
+    else
+        cf = cf * CFrame.Angles(0, 0, math.rad(90)) * CFrame.Angles(0, math.rad(90), 0)
+    end
+    face.CFrame = cf
+    Ghost(face)
+    face.Material = Enum.Material.SmoothPlastic
+    face.Color = Color3.fromRGB(240, 238, 230)
+    face.Parent = chunk
+    for _, a in ipairs({ rng() * 6.28, rng() * 6.28 }) do
+        local hand = Instance.new("Part")
+        hand.Size = Vector3.new(0.05, 0.55, 0.04)
+        hand.CFrame = cf * CFrame.new(-0.09, 0, 0) * CFrame.Angles(a, 0, 0)
+        Ghost(hand)
+        hand.Material = Enum.Material.SmoothPlastic
+        hand.Color = Color3.fromRGB(30, 30, 30)
+        hand.Parent = chunk
+    end
+end
+
+local function CreateCorkBoard(chunk, wall, alongZ, rng)
+    local board = Instance.new("Part")
+    board.Size = Vector3.new(alongZ and 0.12 or 3.6, 2.6, alongZ and 3.6 or 0.12)
+    local off = alongZ and Vector3.new(0.58, 0, 0) or Vector3.new(0, 0, 0.58)
+    board.CFrame = CFrame.new(wall.Position.X + off.X, 5.6, wall.Position.Z + off.Z)
+    Ghost(board)
+    board.Material = Enum.Material.Wood
+    board.Color = Color3.fromRGB(128, 92, 58)
+    board.Parent = chunk
+    for _ = 1, 3 do
+        local paper = Instance.new("Part")
+        paper.Size = Vector3.new(alongZ and 0.05 or 0.9, 0.9, alongZ and 0.9 or 0.05)
+        paper.CFrame = board.CFrame * CFrame.new(alongZ and -0.09 or (rng() - 0.5) * 2.4, (rng() - 0.5) * 1.4, alongZ and (rng() - 0.5) * 2.4 or -0.09) * CFrame.Angles(0, 0, (rng() - 0.5) * 0.3)
+        Ghost(paper)
+        paper.Material = Enum.Material.SmoothPlastic
+        paper.Color = Color3.fromRGB(232, 228, 214)
+        paper.Parent = chunk
+    end
+end
+
+local function CreateWhiteboard(chunk, wall, alongZ, rng)
+    local board = Instance.new("Part")
+    board.Size = Vector3.new(alongZ and 0.12 or 4.2, 2.6, alongZ and 4.2 or 0.12)
+    local off = alongZ and Vector3.new(0.58, 0, 0) or Vector3.new(0, 0, 0.58)
+    board.CFrame = CFrame.new(wall.Position.X + off.X, 5.6, wall.Position.Z + off.Z)
+    Ghost(board)
+    board.Material = Enum.Material.Glass
+    board.Color = Color3.fromRGB(245, 246, 248)
+    board.Parent = chunk
+    local line = Instance.new("Part")
+    line.Size = Vector3.new(alongZ and 0.05 or 2.6, 0.08, alongZ and 2.6 or 0.05)
+    line.CFrame = board.CFrame * CFrame.new(alongZ and -0.08 or (rng() - 0.5) * 2, (rng() - 0.5) * 1.2, alongZ and (rng() - 0.5) * 2 or -0.08) * CFrame.Angles(0, 0, (rng() - 0.5) * 0.5)
+    Ghost(line)
+    line.Material = Enum.Material.SmoothPlastic
+    line.Color = Color3.fromRGB(40, 40, 48)
+    line.Parent = chunk
+end
+
+local function CreateWallScuff(chunk, wall, alongZ, rng)
+    local len = 2 + rng() * 4
+    local h = 1 + rng() * 2.5
+    local s = Instance.new("Part")
+    s.Size = alongZ and Vector3.new(0.06, h, len) or Vector3.new(len, h, 0.06)
+    local off = alongZ and Vector3.new(0.53, 0, 0) or Vector3.new(0, 0, 0.53)
+    s.CFrame = CFrame.new(wall.Position.X + off.X, 1.5 + rng() * 3, wall.Position.Z + off.Z) * CFrame.Angles(0, alongZ and 0 or rng() * 0.2, (rng() - 0.5) * 0.1)
+    Ghost(s)
+    s.Material = Enum.Material.SmoothPlastic
+    s.Color = Color3.fromRGB(120, 106, 78)
+    s.Transparency = 0.45
+    s.Parent = chunk
+end
+
+local function CreateExitSign(chunk, wall)
+    local sign = Instance.new("Part")
+    sign.Size = Vector3.new(3, 0.9, 0.25)
+    sign.CFrame = CFrame.new(wall.Position.X, WALL_HEIGHT - 1.6, wall.Position.Z)
+    Ghost(sign)
+    sign.Material = Enum.Material.Neon
+    sign.Color = Color3.fromRGB(40, 200, 70)
+    sign.Parent = chunk
+    local gui = Instance.new("SurfaceGui")
+    gui.Face = Enum.NormalId.Front
+    gui.Parent = sign
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.new(1, 0, 1, 0)
+    t.BackgroundTransparency = 1
+    t.Text = "EXIT"
+    t.Font = Enum.Font.GothamBold
+    t.TextColor3 = Color3.fromRGB(180, 255, 190)
+    t.TextScaled = true
+    t.Parent = gui
+    local l = Instance.new("PointLight")
+    l.Color = Color3.fromRGB(90, 255, 120)
+    l.Range = 8
+    l.Brightness = 0.35
+    l.Parent = sign
+end
+
+local function CreateVendingDecor(chunk, pos, rng)
+    local vm = Instance.new("Part")
+    vm.Size = Vector3.new(5, 9, 3)
+    vm.Position = pos + Vector3.new(0, 4.5, 0)
+    Solid(vm)
+    vm.Material = Enum.Material.Metal
+    vm.Color = Color3.fromRGB(46, 46, 52)
+    vm.Parent = chunk
+    local front = Instance.new("Part")
+    front.Size = Vector3.new(3.4, 6, 0.2)
+    front.CFrame = vm.CFrame * CFrame.new(-0.5, 0.4, -1.55)
+    Ghost(front)
+    front.Material = Enum.Material.Glass
+    front.Color = Color3.fromRGB(120, 180, 190)
+    front.Transparency = 0.45
+    front.Parent = chunk
+    local rows = {}
+    for r = 0, 2 do
+        for c = 0, 2 do
+            table.insert(rows, Vector3.new(-1.1 + c * 1.1, 2.2 - r * 1.6, -0.15))
+        end
+    end
+    for _, o in ipairs(rows) do
+        if rng() < 0.6 then
+            local item = Instance.new("Part")
+            item.Size = Vector3.new(0.5, 0.9, 0.5)
+            item.CFrame = front.CFrame * CFrame.new(o.X, o.Y, o.Z)
+            Ghost(item)
+            item.Material = Enum.Material.SmoothPlastic
+            item.Color = Color3.fromRGB(180 + math.floor(rng() * 60), 170, 140)
+            item.Parent = chunk
+        end
+    end
+    local l = Instance.new("PointLight")
+    l.Color = Color3.fromRGB(140, 220, 230)
+    l.Range = 10
+    l.Brightness = 0.5
+    l.Parent = front
+    local hum = Instance.new("Sound")
+    hum.SoundId = AUDIO_LEVEL_0
+    hum.Volume = (0.18 + rng() * 0.08) * MASTER
+    hum.PlaybackSpeed = 0.8
+    hum.Looped = true
+    hum.RollOffMode = Enum.RollOffMode.InverseTapered
+    hum.RollOffMaxDistance = 30
+    pcall(function() hum.RollOffMinDistance = 5 end)
+    hum.Parent = vm
+    hum:Play()
+end
+
+-- 🏭 INDUSTRIAL PROPS (L2) -----------------------------------------------
+local function CreateBarrel(chunk, pos, rng)
+    local tipped = rng() < 0.3
+    local b = Instance.new("Part")
+    b.Shape = Enum.PartType.Cylinder
+    b.Size = Vector3.new(4, 2.6, 2.6)
+    if tipped then
+        b.CFrame = CFrame.new(pos.X, 1.3, pos.Z) * CFrame.Angles(0, rng() * math.pi, math.rad(90))
+    else
+        b.CFrame = CFrame.new(pos.X, 2, pos.Z)
+    end
+    Solid(b)
+    b.Material = Enum.Material.Metal
+    b.Color = rng() < 0.5 and Color3.fromRGB(105, 70, 45) or Color3.fromRGB(70, 85, 105)
+    b.Parent = chunk
+end
+
+local function CreateCrate(chunk, pos, rng)
+    local s = 2.6 + rng() * 1.4
+    local c = Instance.new("Part")
+    c.Size = Vector3.new(s, s, s)
+    c.CFrame = CFrame.new(pos.X, s / 2, pos.Z) * CFrame.Angles(0, rng() * math.pi, 0)
+    Solid(c)
+    c.Material = Enum.Material.Wood
+    c.Color = JitterColor(Color3.fromRGB(118, 88, 54), 0.15, rng)
+    c.Parent = chunk
+end
+
+local function CreateFuseBox(chunk, wall, alongZ)
+    local box = Instance.new("Part")
+    box.Size = Vector3.new(alongZ and 0.5 or 1.6, 2, alongZ and 1.6 or 0.5)
+    local off = alongZ and Vector3.new(0.75, 0, 0) or Vector3.new(0, 0, 0.75)
+    box.CFrame = CFrame.new(wall.Position.X + off.X, 6, wall.Position.Z + off.Z)
+    Ghost(box)
+    box.Material = Enum.Material.Metal
+    box.Color = Color3.fromRGB(92, 94, 98)
+    box.Parent = chunk
+    local conduit = Instance.new("Part")
+    conduit.Shape = Enum.PartType.Cylinder
+    conduit.Size = Vector3.new(WALL_HEIGHT - 7.5, 0.3, 0.3)
+    conduit.CFrame = CFrame.new(box.Position.X, 7 + (WALL_HEIGHT - 7.5) / 2, box.Position.Z)
+    Ghost(conduit)
+    conduit.Material = Enum.Material.Metal
+    conduit.Color = Color3.fromRGB(110, 112, 116)
+    conduit.Parent = chunk
+end
+
+local function CreatePallet(chunk, pos, rng)
+    local yaw = rng() * math.pi
+    local cf = CFrame.new(pos.X, 0, pos.Z) * CFrame.Angles(0, yaw, 0)
+    for i = -1, 1 do
+        local slat = Instance.new("Part")
+        slat.Size = Vector3.new(4.4, 0.22, 1.3)
+        slat.CFrame = cf * CFrame.new(0, 0.11, i * 1.55)
+        Solid(slat)
+        slat.Material = Enum.Material.Wood
+        slat.Color = Color3.fromRGB(130, 100, 62)
+        slat.Parent = chunk
+    end
+    for _, s in ipairs({ -1, 1 }) do
+        local stringer = Instance.new("Part")
+        stringer.Size = Vector3.new(1.2, 0.22, 4.6)
+        stringer.CFrame = cf * CFrame.new(s * 1.5, 0.33, 0)
+        Solid(stringer)
+        stringer.Material = Enum.Material.Wood
+        stringer.Color = Color3.fromRGB(120, 92, 58)
+        stringer.Parent = chunk
+    end
+    if rng() < 0.6 then
+        CreateBox(chunk, pos + Vector3.new(0, 0.5, 0), rng)
+    end
+end
+
+-- 🔧 SHARED INDUSTRIAL ----------------------------------------------------
+local function CreateSteam(parent, pos)
+    local attach = Instance.new("Attachment")
+    attach.Position = pos
+    attach.Parent = parent
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Rate = IS_MOBILE and 8 or 15
+    emitter.Speed = NumberRange.new(5, 12)
+    emitter.Lifetime = NumberRange.new(3, 5)
+    emitter.Texture = "rbxassetid://243660364"
+    emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.7), NumberSequenceKeypoint.new(1, 1) })
+    emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1.5), NumberSequenceKeypoint.new(1, 8) })
+    emitter.Acceleration = Vector3.new(0, 8, 0)
+    emitter.Parent = attach
+    local hiss = Instance.new("Sound")
+    hiss.SoundId = "rbxassetid://130972000"
+    hiss.Volume = 0.45 * MASTER
+    hiss.Looped = true
+    hiss.RollOffMaxDistance = 60
+    hiss.Parent = parent
+    hiss:Play()
+end
+
+local function CreatePipes(chunk, wallPos, alongZ, rng)
+    for _ = 1, 1 + math.floor(rng() * 2) do
+        local pipe = Instance.new("Part")
+        pipe.Shape = Enum.PartType.Cylinder
+        pipe.Material = Enum.Material.DiamondPlate
+        pipe.Color = Color3.fromRGB(110, 110, 115)
+        Solid(pipe)
+        local length = WALL_SPACING + 0.2
+        pipe.Size = Vector3.new(length, (8 + math.floor(rng() * 9)) / 10, (8 + math.floor(rng() * 9)) / 10)
+        local h = 3 + math.floor(rng() * (WALL_HEIGHT - 6))
+        local off = alongZ and Vector3.new(1.1, 0, 0) or Vector3.new(0, 0, 1.1)
+        pipe.Position = Vector3.new(wallPos.X, h, wallPos.Z) + off
+        if alongZ then
+            pipe.CFrame = CFrame.new(pipe.Position) * CFrame.Angles(0, math.rad(90), 0)
+        else
+            pipe.CFrame = CFrame.new(pipe.Position)
+        end
+        pipe.Parent = chunk
+        if rng() < 0.12 then
+            CreateSteam(pipe, Vector3.zero)
+        end
+    end
+end
+
+local function CreateEye(chunk, pos)
+    local eye = Instance.new("Part")
+    eye.Size = Vector3.new(1, 1, 1)
+    eye.Shape = Enum.PartType.Ball
+    Ghost(eye)
+    eye.Material = Enum.Material.Neon
+    eye.Color = Color3.fromRGB(255, 0, 0)
+    eye.Position = pos
+    eye.Parent = chunk
+    local light = Instance.new("PointLight")
+    light.Color = Color3.fromRGB(255, 0, 0)
+    light.Range = 6
+    light.Brightness = 0.6
+    light.Parent = eye
+    local billboard = Instance.new("BillboardGui")
+    billboard.Size = UDim2.new(2, 0, 2, 0)
+    billboard.Adornee = eye
+    billboard.Parent = eye
+    local decal = Instance.new("ImageLabel")
+    decal.Image = EYE_IMAGE
+    decal.Size = UDim2.new(1, 0, 1, 0)
+    decal.BackgroundTransparency = 1
+    decal.Parent = billboard
+end
+
+local function CreateDust(part, offset)
+    local attach = Instance.new("Attachment")
+    attach.Position = offset
+    attach.Parent = part
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Rate = DUST_RATE
+    emitter.Speed = NumberRange.new(0, 2)
+    emitter.Lifetime = NumberRange.new(10, 20)
+    emitter.Texture = "rbxassetid://243660364"
+    emitter.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.85), NumberSequenceKeypoint.new(1, 1) })
+    emitter.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.6), NumberSequenceKeypoint.new(1, 2.5) })
+    emitter.Color = ColorSequence.new(Color3.fromRGB(205, 200, 185))
+    emitter.Parent = attach
+end
+
+-- 🏠 DREAMCORE PROPS -----------------------------------------------------
+local function CreateDreamOrb(chunk, data, x, z, rng)
+    local orb = Instance.new("Part")
+    orb.Shape = Enum.PartType.Ball
+    orb.Size = Vector3.new(1.6, 1.6, 1.6)
+    orb.Position = Vector3.new(x, WALL_HEIGHT - 1.2, z)
+    Ghost(orb)
+    orb.Material = Enum.Material.Neon
+    orb.Color = DREAM_PASTELS[1 + math.floor(rng() * #DREAM_PASTELS)]
+    orb.Parent = chunk
+    local light = Instance.new("PointLight")
+    light.Color = orb.Color
+    light.Range = 32
+    light.Brightness = 1.1
+    light.Parent = orb
+    table.insert(data.Lights, { Light = light, Base = 1.1 })
+end
+
+local function CreateCloud(parent, x, z, rng)
+    local y = 28 + math.floor(rng() * 15)
+    local base = Vector3.new(x, y, z)
+    for _ = 1, 3 do
+        local puff = Instance.new("Part")
+        puff.Shape = Enum.PartType.Ball
+        local s = 10 + math.floor(rng() * 9)
+        puff.Size = Vector3.new(s, s, s)
+        puff.Position = base + Vector3.new(math.floor(rng() * 15) - 7, math.floor(rng() * 5) - 2, math.floor(rng() * 15) - 7)
+        Ghost(puff)
+        puff.Material = Enum.Material.SmoothPlastic
+        puff.Color = Color3.fromRGB(250, 250, 255)
+        puff.Transparency = 0.05
+        puff.Parent = parent
+    end
+end
+
+local function CreateSunFace(parent, data, x, z, rng)
+    local sun = Instance.new("Part")
+    sun.Shape = Enum.PartType.Ball
+    sun.Size = Vector3.new(24, 24, 24)
+    sun.Position = Vector3.new(x, 58, z)
+    Ghost(sun)
+    sun.Material = Enum.Material.Neon
+    sun.Color = Color3.fromRGB(255, 236, 170)
+    sun.Parent = parent
+    local gui = Instance.new("SurfaceGui")
+    gui.Face = Enum.NormalId.Front
+    gui.CanvasSize = Vector2.new(100, 100)
+    gui.Parent = sun
+    local t = Instance.new("TextLabel")
+    t.Size = UDim2.new(1, 0, 1, 0)
+    t.BackgroundTransparency = 1
+    t.Text = ":)"
+    t.Font = Enum.Font.GothamBold
+    t.TextColor3 = Color3.fromRGB(150, 90, 40)
+    t.TextScaled = true
+    t.Parent = gui
+    table.insert(data.Animations, { Part = sun, Base = sun.CFrame, Type = "spin", Speed = 0.05 + rng() * 0.04 })
+end
+
+local function CreateSkyDoor(chunk, data, x, z, rng)
+    local y = 2.5 + rng() * 5
+    local yaw = rng() * math.pi * 2
+    local base = CFrame.new(x, y + 4, z) * CFrame.Angles(0, yaw, 0)
+    local door = Instance.new("Part")
+    door.Size = Vector3.new(4, 8, 0.4)
+    door.CFrame = base
+    Ghost(door)
+    door.CanTouch = true
+    door.Material = Enum.Material.Wood
+    door.Color = Color3.fromRGB(243, 238, 228)
+    door.Parent = chunk
+    local glow = Instance.new("Part")
+    glow.Size = Vector3.new(4.6, 8.6, 0.15)
+    glow.CFrame = base * CFrame.new(0, 0, 0.35)
+    Ghost(glow)
+    glow.Material = Enum.Material.Neon
+    glow.Color = Color3.fromRGB(255, 244, 214)
+    glow.Transparency = 0.25
+    glow.Parent = chunk
+    local l = Instance.new("PointLight")
+    l.Color = Color3.fromRGB(255, 240, 200)
+    l.Range = 14
+    l.Brightness = 0.8
+    l.Parent = door
+    table.insert(data.Animations, { Part = door, GlowPart = glow, Base = base, GlowBase = glow.CFrame, Type = "bob", Amp = 0.5 + rng() * 0.4, Speed = 0.8 + rng() * 0.7, Phase = rng() * 6.28 })
+    door.Touched:Connect(function(hit)
+        local char = Player.Character
+        if char and hit.Parent == char and os.clock() - (door:GetAttribute("Warm") or -999) > 5 then
+            door:SetAttribute("Warm", os.clock())
+            PlayAt(door.Position, CREAK_ID, 0.4, 1.6, 60, 3)
+        end
+    end)
+end
+
+local function CreateDreamPool(chunk, data, x, z, rng)
+    for i = 0, 3 do
+        for j = 0, 3 do
+            local tile = Instance.new("Part")
+            tile.Size = Vector3.new(4, 0.3, 4)
+            tile.Position = Vector3.new(x - 6 + i * 4, 0.15, z - 6 + j * 4)
+            Ghost(tile)
+            tile.Material = Enum.Material.SmoothPlastic
+            tile.Color = (i + j) % 2 == 0 and Color3.fromRGB(240, 244, 248) or Color3.fromRGB(160, 200, 230)
+            tile.Parent = chunk
+        end
+    end
+    local water = Instance.new("Part")
+    water.Size = Vector3.new(15, 0.4, 15)
+    water.Position = Vector3.new(x, 0.5, z)
+    Ghost(water)
+    water.Material = Enum.Material.Glass
+    water.Color = Color3.fromRGB(90, 190, 230)
+    water.Transparency = 0.45
+    water.Parent = chunk
+    local l = Instance.new("PointLight")
+    l.Color = Color3.fromRGB(120, 210, 255)
+    l.Range = 14
+    l.Brightness = 0.6
+    l.Parent = water
+    table.insert(data.Lights, { Light = l, Base = 0.6 })
+end
+
+local function CreateCRT(chunk, data, x, z, rng)
+    local yaw = rng() * math.pi * 2
+    local base = CFrame.new(x, 0, z) * CFrame.Angles(0, yaw, 0)
+    local body = Instance.new("Part")
+    body.Size = Vector3.new(4, 3.4, 3.6)
+    body.CFrame = base * CFrame.new(0, 1.9, 0)
+    Ghost(body)
+    body.Material = Enum.Material.SmoothPlastic
+    body.Color = Color3.fromRGB(206, 196, 172)
+    body.Parent = chunk
+    local screen = Instance.new("Part")
+    screen.Size = Vector3.new(3, 2.4, 0.15)
+    screen.CFrame = base * CFrame.new(0, 2.1, -1.82)
+    Ghost(screen)
+    screen.Material = Enum.Material.Neon
+    screen.Color = Color3.fromRGB(20, 22, 26)
+    screen.Parent = chunk
+    local l = Instance.new("PointLight")
+    l.Color = Color3.fromRGB(180, 200, 220)
+    l.Range = 9
+    l.Brightness = 0.4
+    l.Parent = screen
+    table.insert(data.Lights, { Light = l, Base = 0.4 })
+    local static = Instance.new("Sound")
+    static.SoundId = AUDIO_LEVEL_0
+    static.Volume = 0.16 * MASTER
+    static.PlaybackSpeed = 1.5
+    static.Looped = true
+    static.RollOffMode = Enum.RollOffMode.InverseTapered
+    static.RollOffMaxDistance = 26
+    pcall(function() static.RollOffMinDistance = 4 end)
+    static.Parent = screen
+    static:Play()
+    table.insert(data.Buzzes, { S = static, V = static.Volume, P = 1.5 })
+    task.spawn(function()
+        while RUNNING and screen.Parent do
+            local v = 0.05 + math.random() * 0.3
+            local c = math.random() < 0.06 and DREAM_PASTELS[math.random(#DREAM_PASTELS)] or Color3.new(v, v, v)
+            screen.Color = c
+            l.Brightness = 0.2 + math.random() * 0.8
+            task.wait(math.random(3, 10) / 100)
+        end
+    end)
+end
+
+local function CreateSlide(chunk, data, x, z, rng)
+    local yaw = rng() * math.pi * 2
+    local base = CFrame.new(x, 0, z) * CFrame.Angles(0, yaw, 0)
+    local slide = Instance.new("WedgePart")
+    slide.Size = Vector3.new(7, 9, 16)
+    slide.CFrame = base * CFrame.new(0, 4.5, 0)
+    Ghost(slide)
+    slide.CanCollide = true
+    slide.Material = Enum.Material.SmoothPlastic
+    slide.Color = DREAM_PASTELS[1 + math.floor(rng() * #DREAM_PASTELS)]
+    slide.Parent = chunk
+    for i = -1, 1, 2 do
+        local rail = Instance.new("Part")
+        rail.Size = Vector3.new(0.6, 0.6, 17)
+        rail.CFrame = base * CFrame.new(i * 3.6, 4.7, -0.3)
+        Ghost(rail)
+        rail.CanCollide = true
+        rail.Material = Enum.Material.SmoothPlastic
+        rail.Color = Color3.fromRGB(250, 250, 250)
+        rail.Parent = chunk
+    end
+end
+
+local function CreateCheckerFloor(chunk, x, z)
+    for i = 0, 3 do
+        for j = 0, 3 do
+            local tile = Instance.new("Part")
+            tile.Size = Vector3.new(7.5, 0.25, 7.5)
+            tile.Position = Vector3.new(x - 11.25 + i * 7.5, 0.12, z - 11.25 + j * 7.5)
+            Ghost(tile)
+            tile.Material = Enum.Material.SmoothPlastic
+            tile.Color = (i + j) % 2 == 0 and Color3.fromRGB(38, 38, 42) or Color3.fromRGB(242, 242, 246)
+            tile.Parent = chunk
+        end
+    end
+end
+
+local function CreateSkyEye(chunk, x, z, rng)
+    local holder = Instance.new("Part")
+    holder.Size = Vector3.new(1, 1, 1)
+    holder.Position = Vector3.new(x, 34 + rng() * 12, z)
+    Ghost(holder)
+    holder.Transparency = 1
+    holder.Parent = chunk
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(26, 0, 16, 0)
+    bb.AlwaysOnTop = false
+    bb.Adornee = holder
+    bb.Parent = holder
+    local img = Instance.new("ImageLabel")
+    img.Image = EYE_IMAGE
+    img.Size = UDim2.new(1, 0, 1, 0)
+    img.BackgroundTransparency = 1
+    img.ImageTransparency = 0.1
+    img.Parent = bb
+end
+
+local function CreateTree(chunk, x, z, rng)
+    local trunk = Instance.new("Part")
+    trunk.Shape = Enum.PartType.Cylinder
+    trunk.Size = Vector3.new(9, 1.6, 1.6)
+    trunk.CFrame = CFrame.new(x, 4.5, z) * CFrame.Angles(0, 0, math.rad(90))
+    Ghost(trunk)
+    trunk.Material = Enum.Material.SmoothPlastic
+    trunk.Color = Color3.fromRGB(200, 160, 130)
+    trunk.Parent = chunk
+    local f1 = Instance.new("Part")
+    f1.Shape = Enum.PartType.Ball
+    f1.Size = Vector3.new(7, 7, 7)
+    f1.Position = Vector3.new(x, 10, z)
+    Ghost(f1)
+    f1.Material = Enum.Material.SmoothPlastic
+    f1.Color = Color3.fromRGB(190, 235, 200)
+    f1.Parent = chunk
+    local f2 = Instance.new("Part")
+    f2.Shape = Enum.PartType.Ball
+    f2.Size = Vector3.new(5, 5, 5)
+    f2.Position = Vector3.new(x + 2.5, 11.5, z + 1)
+    Ghost(f2)
+    f2.Material = Enum.Material.SmoothPlastic
+    f2.Color = Color3.fromRGB(214, 255, 224)
+    f2.Parent = chunk
+end
+
+local DecorateLevel3
+DecorateLevel3 = function(chunk, wall, alongZ, rng)
+    local r = rng()
+    if r < 0.25 then
+        wall.Material = Enum.Material.Glass
+        wall.Transparency = 0.5
+        wall.Reflectance = 0.15
+    elseif r < 0.40 then
+        local trim = Instance.new("Part")
+        trim.Size = alongZ and Vector3.new(0.3, 0.8, wall.Size.Z) or Vector3.new(wall.Size.X, 0.8, 0.3)
+        trim.Position = Vector3.new(wall.Position.X, WALL_HEIGHT / 2 - 1.4, wall.Position.Z)
+        Ghost(trim)
+        trim.Material = Enum.Material.Neon
+        trim.Color = DREAM_PASTELS[1 + math.floor(rng() * #DREAM_PASTELS)]
+        trim.Parent = chunk
+    end
+end
+
+-- 🏢 LANDMARKS ------------------------------------------------------------
+local function CreateLandmark(chunk, data, pos, level, rng)
+    if level == 1 then
+        local roll = rng()
+        if roll < 0.15 and pos.Magnitude > 90 then
+            CreateVendingDecor(chunk, pos + Vector3.new(-8, 0, -6), rng)
+            local breakTable = Instance.new("Part")
+            breakTable.Shape = Enum.PartType.Cylinder
+            breakTable.Size = Vector3.new(0.4, 6, 6)
+            breakTable.CFrame = CFrame.new(pos.X + 4, 1.8, pos.Z + 4)
+            Solid(breakTable)
+            breakTable.Material = Enum.Material.Wood
+            breakTable.Color = Color3.fromRGB(110, 82, 52)
+            breakTable.Parent = chunk
+            CreateOfficeChair(chunk, pos + Vector3.new(8, 0, 4), rng)
+            CreateOfficeChair(chunk, pos + Vector3.new(4, 0, 9), rng)
+            CreateWaterCooler(chunk, pos + Vector3.new(9, 0, -5), rng)
+            CreateCoffeeCup(chunk, pos + Vector3.new(5, 0, 5), rng)
+            CreateCoffeeCup(chunk, pos + Vector3.new(3, 0, 6), rng)
+            CreateBox(chunk, pos + Vector3.new(-6, 0, 8), rng)
+            -- radio on the break room table: 1 in 1000
+            if rng() < RADIO_CHANCE then
+                CreateRadio(chunk, Vector3.new(pos.X + 4, 2.0, pos.Z + 4), rng)
+            end
+        elseif roll < 0.5 then
+            local roomSize = 20 + math.floor(rng() * 11)
+            for x = -roomSize / 2, roomSize / 2, 12 do
+                for z = -roomSize / 2, roomSize / 2, 12 do
+                    CreateDesk(chunk, pos + Vector3.new(x, 0, z), rng)
+                    if rng() < 0.5 then CreateOfficeChair(chunk, pos + Vector3.new(x + 5, 0, z + 2), rng) end
+                    if rng() < 0.35 then CreateFilingCabinet(chunk, pos + Vector3.new(x - 6, 0, z - 5), rng) end
+                    if rng() < 0.3 then CreateBox(chunk, pos + Vector3.new(x + 3, 0, z - 6), rng) end
+                    if rng() < 0.3 then CreateCoffeeCup(chunk, pos + Vector3.new(x + 1, 0, z + 1), rng) end
+                    if rng() < 0.3 then CreatePaper(chunk, pos + Vector3.new(x - 2, 0, z + 3), rng) end
+                end
+            end
+            -- radio on the center desk: 1 in 1000
+            if rng() < RADIO_CHANCE then
+                CreateRadio(chunk, Vector3.new(pos.X, 2.85, pos.Z), rng)
+            end
+            for _ = 1, 4 do
+                CreateDebris(chunk, pos + Vector3.new(math.floor(rng() * roomSize) - roomSize / 2, 1, math.floor(rng() * roomSize) - roomSize / 2), rng)
+            end
+        end
+    elseif level == 2 then
+        if rng() < 0.6 then
+            local machine = Instance.new("Part")
+            machine.Size = Vector3.new(25, 25, 25)
+            machine.Position = pos + Vector3.new(0, 12.5, 0)
+            Solid(machine)
+            machine.Material = Enum.Material.Metal
+            machine.Color = Color3.fromRGB(90, 90, 95)
+            machine.Parent = chunk
+            CreateSteam(machine, Vector3.new(0, 12, 0))
+            for _ = 1, 3 do
+                local pick = rng()
+                if pick < 0.4 then
+                    CreateBarrel(chunk, pos + Vector3.new(math.floor(rng() * 25) - 12, 0, math.floor(rng() * 25) - 12), rng)
+                elseif pick < 0.7 then
+                    CreateCrate(chunk, pos + Vector3.new(math.floor(rng() * 25) - 12, 0, math.floor(rng() * 25) - 12), rng)
+                else
+                    CreateDebris(chunk, pos + Vector3.new(math.floor(rng() * 25) - 12, 1, math.floor(rng() * 25) - 12), rng)
+                end
+            end
+        end
+    elseif level == 3 and rng() < 0.6 then
+        local plaza = Instance.new("Part")
+        plaza.Size = Vector3.new(28, 0.4, 28)
+        plaza.Position = pos + Vector3.new(0, 0.2, 0)
+        Ghost(plaza)
+        plaza.Material = Enum.Material.Glass
+        plaza.Color = Color3.fromRGB(130, 240, 255)
+        plaza.Transparency = 0.3
+        plaza.Parent = chunk
+        for _, corner in ipairs({ Vector3.new(12, 0, 12), Vector3.new(-12, 0, 12), Vector3.new(12, 0, -12), Vector3.new(-12, 0, -12) }) do
+            local pillar = Instance.new("Part")
+            pillar.Size = Vector3.new(3, 10, 3)
+            pillar.Position = pos + corner + Vector3.new(0, 5, 0)
+            Solid(pillar)
+            pillar.Material = Enum.Material.SmoothPlastic
+            pillar.Color = DREAM_PASTELS[1 + math.floor(rng() * #DREAM_PASTELS)]
+            pillar.Parent = chunk
+        end
+        for _ = 1, 3 do
+            local orb = Instance.new("Part")
+            orb.Shape = Enum.PartType.Ball
+            orb.Size = Vector3.new(2, 2, 2)
+            orb.Position = pos + Vector3.new(math.floor(rng() * 21) - 10, 5 + math.floor(rng() * 6), math.floor(rng() * 21) - 10)
+            Ghost(orb)
+            orb.Material = Enum.Material.Neon
+            orb.Color = DREAM_PASTELS[1 + math.floor(rng() * #DREAM_PASTELS)]
+            orb.Parent = chunk
+        end
+    end
+end
+
+-- ▶️ CHUNK BUILDER --------------------------------------------------------
+local function BuildChunkInstant(cx, cz)
+    local chunkName = cx .. "_" .. cz
+    if loadedChunks[chunkName] then return end
+    queuedSet[chunkName] = nil
+
     local rng = MakeRNG(cx, cz)
+    local distFromCenter = math.sqrt(cx * cx + cz * cz)
+    local isLevel2 = distFromCenter >= LEVEL_2_DISTANCE
+    local isLevel3 = distFromCenter >= LEVEL_3_DISTANCE
+
+    local chunk = Instance.new("Model")
+    chunk.Name = chunkName
+    local data = { Model = chunk, CX = cx, CZ = cz, Key = chunkName, Lights = {}, Buzzes = {}, Animations = {} }
+
+    local wTex, fTex, wCol, fCol, level, wallMaterial
+    if isLevel3 then
+        level = 3
+        wTex = TEX_WALL_DREAM; fTex = TEX_FLOOR_0
+        wCol = DREAM_PASTELS[1 + math.floor(rng() * #DREAM_PASTELS)]
+        fCol = Color3.fromRGB(238, 236, 248)
+        wallMaterial = Enum.Material.SmoothPlastic
+    elseif isLevel2 then
+        level = 2
+        wTex = TEX_WALL_2; fTex = TEX_FLOOR_2
+        wCol = Color3.fromRGB(98, 96, 100)
+        fCol = Color3.fromRGB(72, 71, 74)
+        wallMaterial = Enum.Material.Concrete
+    else
+        level = 1
+        wTex = WallTex.Current; fTex = TEX_FLOOR_0
+        wCol = Color3.fromRGB(204, 194, 140)
+        fCol = JitterColor(Color3.fromRGB(166, 155, 112), 0.12, rng) -- worn carpet variation
+        wallMaterial = Enum.Material.SmoothPlastic
+    end
+
+    TexVar = {
+        U = 0.85 + rng() * 0.3,
+        V = 0.85 + rng() * 0.3,
+        Tint = 0.06 + rng() * 0.06,
+        Dirt = level == 1,
+        Rng = rng,
+    }
 
     local floor = Instance.new("Part")
-    floor.Name = "Floor"
+    Solid(floor)
     floor.Size = Vector3.new(CHUNK_SIZE, 1, CHUNK_SIZE)
-    floor.Position = Vector3.new(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE)
-    floor.Material = Enum.Material.SmoothPlastic
-    floor.Color = Color3.fromRGB(190, 186, 176)
-    floor.Anchored = true
+    floor.Position = Vector3.new(cx * CHUNK_SIZE, -0.5, cz * CHUNK_SIZE)
+    floor.Material = (isLevel3 and Enum.Material.SmoothPlastic)
+        or (isLevel2 and Enum.Material.DiamondPlate)
+        or Enum.Material.Fabric
+    ApplyTexture(floor, fTex, Enum.NormalId.Top, fCol, isLevel2 and 4 or 5, 0.2)
     floor.Parent = chunk
 
-    local ceiling = Instance.new("Part")
-    ceiling.Name = "Ceiling"
-    ceiling.Size = Vector3.new(CHUNK_SIZE, 1, CHUNK_SIZE)
-    ceiling.Position = Vector3.new(cx * CHUNK_SIZE, WALL_HEIGHT + 1, cz * CHUNK_SIZE)
-    ceiling.Material = Enum.Material.SmoothPlastic
-    ceiling.Color = Color3.fromRGB(210, 206, 196)
-    ceiling.Anchored = true
-    ceiling.Parent = chunk
-
-    for x = -CHUNK_SIZE / 2 + 8, CHUNK_SIZE / 2 - 8, WALL_SPACING do
-        for z = -CHUNK_SIZE / 2 + 8, CHUNK_SIZE / 2 - 8, WALL_SPACING do
-            CreateCeilingTile(chunk, data, cx * CHUNK_SIZE + x, cz * CHUNK_SIZE + z, 0, cx, cz, rng)
+    if not isLevel3 then
+        CreateDust(floor, Vector3.new(rng() * 30 - 15, 6, rng() * 30 - 15))
+        if rng() < 0.5 then CreateDust(floor, Vector3.new(rng() * 30 - 15, 5, rng() * 30 - 15)) end
+    else
+        for _ = 1, 2 + math.floor(rng() * 3) do
+            CreateCloud(chunk, cx * CHUNK_SIZE + math.floor(rng() * 51) - 25, cz * CHUNK_SIZE + math.floor(rng() * 51) - 25, rng)
+        end
+        if rng() < 0.15 then
+            CreateSunFace(chunk, data, cx * CHUNK_SIZE + math.floor(rng() * 41) - 20, cz * CHUNK_SIZE + math.floor(rng() * 41) - 20, rng)
+        end
+        local r = rng()
+        if r < 0.10 then
+            CreateSkyDoor(chunk, data, cx * CHUNK_SIZE + math.floor(rng() * 31) - 15, cz * CHUNK_SIZE + math.floor(rng() * 31) - 15, rng)
+        elseif r < 0.18 then
+            CreateDreamPool(chunk, data, cx * CHUNK_SIZE + math.floor(rng() * 21) - 10, cz * CHUNK_SIZE + math.floor(rng() * 21) - 10, rng)
+        elseif r < 0.26 then
+            CreateCRT(chunk, data, cx * CHUNK_SIZE + math.floor(rng() * 31) - 15, cz * CHUNK_SIZE + math.floor(rng() * 31) - 15, rng)
+        elseif r < 0.33 then
+            CreateSlide(chunk, data, cx * CHUNK_SIZE + math.floor(rng() * 21) - 10, cz * CHUNK_SIZE + math.floor(rng() * 21) - 10, rng)
+        elseif r < 0.41 then
+            CreateCheckerFloor(chunk, cx * CHUNK_SIZE, cz * CHUNK_SIZE)
+        elseif r < 0.47 then
+            CreateSkyEye(chunk, cx * CHUNK_SIZE + math.floor(rng() * 41) - 20, cz * CHUNK_SIZE + math.floor(rng() * 41) - 20, rng)
+        elseif r < 0.54 then
+            CreateTree(chunk, cx * CHUNK_SIZE + math.floor(rng() * 31) - 15, cz * CHUNK_SIZE + math.floor(rng() * 31) - 15, rng)
         end
     end
 
-    local wallColor = Color3.fromRGB(212, 205, 188)
-    local wallMaterial = Enum.Material.Fabric
+    local cells = CHUNK_SIZE / WALL_SPACING
+    local originX = cx * CHUNK_SIZE - CHUNK_SIZE / 2
+    local originZ = cz * CHUNK_SIZE - CHUNK_SIZE / 2
 
-    local minX = cx * CHUNK_SIZE - CHUNK_SIZE / 2
-    local maxX = cx * CHUNK_SIZE + CHUNK_SIZE / 2
-    local minZ = cz * CHUNK_SIZE - CHUNK_SIZE / 2
-    local maxZ = cz * CHUNK_SIZE + CHUNK_SIZE / 2
+    for lx = 0, cells - 1 do
+        for lz = 0, cells - 1 do
+            local gx = cx * cells + lx
+            local gz = cz * cells + lz
+            local cellX = originX + lx * WALL_SPACING + WALL_SPACING / 2
+            local cellZ = originZ + lz * WALL_SPACING + WALL_SPACING / 2
 
-    for i = 0, 3 do
-        local idx = i + 1
-        local x = (idx % 2 == 0) and minX or maxX
-        local z = (idx % 2 == 0) and (minZ + (i * 10)) or (maxZ - (i * 10))
-        local wall = Instance.new("Part")
-        wall.Anchored = true
-        wall.Material = wallMaterial
-        wall.Size = Vector3.new(1, WALL_H, WALL_SPACING)
-        wall.Position = Vector3.new(x, WALL_H / 2, z)
-        wall.Color = wallColor
-        wall.Parent = chunk
-    end
-
-    for i = 0, 3 do
-        local idx = i + 1
-        local x = (idx % 2 == 0) and (minX + (i * 10)) or (maxX - (i * 10))
-        local z = (idx % 2 == 0) and minZ or maxZ
-        local wall = Instance.new("Part")
-        wall.Anchored = true
-        wall.Material = wallMaterial
-        wall.Size = Vector3.new(WALL_SPACING, WALL_H, 1)
-        wall.Position = Vector3.new(x, WALL_H / 2, z)
-        wall.Color = wallColor
-        wall.Parent = chunk
-    end
-
-    return chunk
-end
-
-local function RefreshChunks()
-    if not Player.Character or not Player.Character:FindFirstChild("HumanoidRootPart") then return end
-    local root = Player.Character.HumanoidRootPart
-    local cx = math.floor(root.Position.X / CHUNK_SIZE + 0.5)
-    local cz = math.floor(root.Position.Z / CHUNK_SIZE + 0.5)
-
-    for dx = -RENDER_RADIUS, RENDER_RADIUS do
-        for dz = -RENDER_RADIUS, RENDER_RADIUS do
-            local key = (cx + dx) .. "_" .. (cz + dz)
-            if not loadedChunks[key] then
-                local c = BuildChunk(cx + dx, cz + dz)
-                loadedChunks[key] = c
+            if level == 3 then
+                if gx % 2 == 0 and gz % 2 == 0 then
+                    CreateDreamOrb(chunk, data, cellX, cellZ, rng)
+                end
+            else
+                CreateCeilingTile(chunk, data, cellX, cellZ, level, gx, gz, rng)
             end
-        end
-    end
 
-    for key, chunk in pairs(loadedChunks) do
-        local x = tonumber(string.match(key, "^(.-)_")) or 0
-        local z = tonumber(string.match(key, "_(.-)$")) or 0
-        local dist = math.abs(x - cx) + math.abs(z - cz)
-        if dist > UNLOAD_RADIUS then
-            chunk:Destroy()
-            loadedChunks[key] = nil
-        end
-    end
-end
+            local roomNoise = math.noise((cellX + SEED) / 110, (cellZ + SEED) / 110, SEED_C)
+            local isOpenRoom = roomNoise > 0.34
+            local nearSpawn = math.abs(cellX) < 24 and math.abs(cellZ) < 24
 
-local function SetupRuntimeLoop()
-    task.spawn(function()
-        while RUNNING do
-            UpdateHiveMind()
-            if Player.Character and Player.Character:FindFirstChild("HumanoidRootPart") then
-                RefreshChunks()
-                UpdateAtmosphere(HiveMind.DistFromCenter)
-            end
-            task.wait(0.2)
-        end
-    end)
-end
+            if isOpenRoom then
+                if not nearSpawn and (gx + gz) % 3 == 0 then
+                    local pillar = Instance.new("Part")
+                    Solid(pillar)
+                    pillar.Size = Vector3.new(3, WALL_H, 3)
+                    pillar.Position = Vector3.new(cellX, WALL_H / 2, cellZ)
+                    pillar.Material = wallMaterial
+                    pillar.Color = wCol
+                    pillar.Parent = chunk
+                end
+                if not nearSpawn then
+                    local r = rng()
+                    if level == 1 then
+                        if r < 0.025 then
+                            CreateOfficeChair(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                        elseif r < 0.035 then
+                            CreateWaterCooler(chunk, Vector3.new(cellX + 2, 0, cellZ + 2), rng)
+                        elseif r < 0.050 then
+                            CreateFilingCabinet(chunk, Vector3.new(cellX - 3, 0, cellZ), rng)
+                        elseif r < 0.080 then
+                            CreateBox(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                        elseif r < 0.095 then
+                            CreateCoffeeCup(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                        elseif r < 0.103 then
+                            CreateWetFloorSign(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                        elseif r < 0.16 then
+                            CreatePaper(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                        elseif r < 0.26 then
+                            CreateStain(chunk, cellX, cellZ, rng)
+                        end
+                    elseif level == 2 then
+                        if r < 0.10 then
+                            CreatePuddle(chunk, cellX, cellZ, rng)
+                        elseif r < 0.13 then
+                            CreateBarrel(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                        elseif r < 0.16 then
+                            CreateCrate(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                        elseif r < 0.175 then
+                            CreatePallet(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                        elseif r < 0.26 then
+                            CreateStain(chunk, cellX, cellZ, rng)
+                        end
+                    end
+                    -- legendary floor radio: 1 in 1000 open cells
+                    if (level == 1 or level == 2) and rng() < RADIO_CHANCE then
+                        CreateRadio(chunk, Vector3.new(cellX, 0, cellZ), rng)
+                    end
+                end
+            elseif not nearSpawn then
+                local ex = cellX + WALL_SPACING / 2
+                local vN = math.noise(gx / 7, gz / 23, SEED_A)
+                if math.abs(vN) < EDGE_WALL_EPS
+                    and not (math.abs(ex) < 24 and math.abs(cellZ) < 24) then
+                    if rng() < DOORWAY_CHANCE then
+                        CreateDoorway(chunk, true, ex, cellZ, wTex, wCol, wallMaterial, rng)
+                    else
+                        local wall = CreateWallPart(chunk, true, ex, cellZ, wTex, wCol, wallMaterial, rng)
+                        if level == 1 then
+                            local baseboard = Instance.new("Part")
+                            baseboard.Size = Vector3.new(wall.Size.X + 0.24, 1.2, wall.Size.Z + 0.24)
+                            baseboard.Position = Vector3.new(wall.Position.X, 0.6, wall.Position.Z)
+                            Solid(baseboard)
+                            baseboard.Material = Enum.Material.Wood
+                            baseboard.Color = Color3.fromRGB(96, 76, 48)
+                            baseboard.Parent = chunk
+                            if rng() < 0.30 then CreateMolding(chunk, wall) end
+                            local wr = rng()
+                            if wr < 0.06 then CreateOutlet(chunk, wall, true)
+                            elseif wr < 0.14 then CreateLightSwitch(chunk, wall, true)
+                            elseif wr < 0.155 then CreateWallClock(chunk, wall, true, rng)
+                            elseif wr < 0.165 then CreateCorkBoard(chunk, wall, true, rng)
+                            elseif wr < 0.175 then CreateWhiteboard(chunk, wall, true, rng)
+                            elseif wr < 0.20 then CreateWallScuff(chunk, wall, true, rng) end
+                            if rng() < 0.025 then CreateExitSign(chunk, wall) end
+                        elseif level == 2 then
+                            if rng() < EYE_SPAWN_CHANCE then
+                                CreateEye(chunk, wall.Position + Vector3.new(0.7, 1, 0))
+                            end
+                            if rng() < 0.35 then CreatePipes(chunk, wall.Position, true, rng) end
+                            if rng() < 0.08 then CreateWires(chunk, wall.Position, rng) end
+                            if rng() < 0.04 then CreateFuseBox(chunk, wall, true) end
+                            if rng() < 0.10 then CreateStain(chunk, wall.Position.X, wall.Position.Z, rng) end
+                        elseif level == 3 then
+                            DecorateLevel3(chunk, wall, true, rng)
+                        end
+                    end
+                end
 
-local function Start()
-    SetupGraphics()
-    SetupAudio()
-    SetupRuntimeLoop()
-    task.spawn(function()
-        while RUNNING do
-            task.wait(0.1)
-            local root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-            if root then
-                local pos = root.Position
-                local n = math.random()
-                if n < 0.015 then
-                    PlayAt(pos + Vector3.new(0, 1.5, 0), CREAK_ID, 0.22, 0.8 + math.random() * 0.4, 160, 8, 1, 0, -4)
+                local sz = cellZ + WALL_SPACING / 2
+                local hN = math.noise(gx / 23, gz / 7, SEED_B)
+                if math.abs(hN) < EDGE_WALL_EPS
+                    and not (math.abs(cellX) < 24 and math.abs(sz) < 24) then
+                    if rng() < DOORWAY_CHANCE then
+                        CreateDoorway(chunk, false, cellX, sz, wTex, wCol, wallMaterial, rng)
+                    else
+                        local wall = CreateWallPart(chunk, false, cellX, sz, wTex, wCol, wallMaterial, rng)
+                        if level == 1 then
+                            local baseboard = Instance.new("Part")
+                            baseboard.Size = Vector3.new(wall.Size.X + 0.24, 1.2, wall.Size.Z + 0.24)
+                            baseboard.Position = Vector3.new(wall.Position.X, 0.6, wall.Position.Z)
+                            Solid(baseboard)
+                            baseboard.Material = Enum.Material.Wood
+                            baseboard.Color = Color3.fromRGB(96, 76, 48)
+                            baseboard.Parent = chunk
+                            if rng() < 0.30 then CreateMolding(chunk, wall) end
+                            local wr = rng()
+                            if wr < 0.06 then CreateOutlet(chunk, wall, false)
+                            elseif wr < 0.14 then CreateLightSwitch(chunk, wall, false)
+                            elseif wr < 0.155 then CreateWallClock(chunk, wall, false, rng)
+                            elseif wr < 0.165 then CreateCorkBoard(chunk, wall, false, rng)
+                            elseif wr < 0.175 then CreateWhiteboard(chunk, wall, false, rng)
+                            elseif wr < 0.20 then CreateWallScuff(chunk, wall, false, rng) end
+                            if rng() < 0.025 then CreateExitSign(chunk, wall) end
+                        elseif level == 2 then
+                            if rng() < EYE_SPAWN_CHANCE then
+                                CreateEye(chunk, wall.Position + Vector3.new(0, 1, 0.7))
+                            end
+                            if rng() < 0.35 then CreatePipes(chunk, wall.Position, false, rng) end
+                            if rng() < 0.08 then CreateWires(chunk, wall.Position, rng) end
+                            if rng() < 0.04 then CreateFuseBox(chunk, wall, false) end
+                            if rng() < 0.10 then CreateStain(chunk, wall.Position.X, wall.Position.Z, rng) end
+                        elseif level == 3 then
+                            DecorateLevel3(chunk, wall, false, rng)
+                        end
+                    end
                 end
             end
         end
-    end)
-end
-
-Start()
-
--- keep old script compatibility but improved visual fidelity
-local function MakeNoisePulse()
-    local root = Player.Character and Player.Character:FindFirstChild("HumanoidRootPart")
-    if root then
-        local pulse = Instance.new("Part")
-        pulse.Size = Vector3.new(0.1, 0.1, 0.1)
-        pulse.Position = root.Position + Vector3.new(0, 1, 0)
-        pulse.Transparency = 1
-        pulse.Anchored = true
-        pulse.Parent = Workspace
-        local s = Instance.new("Sound")
-        s.SoundId = THUMP_ID
-        s.Volume = 0.15 * MASTER
-        s.Parent = pulse
-        s:Play()
-        Debris:AddItem(pulse, 2)
     end
+
+    local center = Vector3.new(cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE)
+    local far = math.abs(cx) > 1 or math.abs(cz) > 1
+    if far then
+        CreateLandmark(chunk, data, center, level, rng)
+        if level == 1 and rng() < 0.05 then
+            local elevator = Instance.new("Part")
+            elevator.Size = Vector3.new(4, 10, 4)
+            elevator.Position = center + Vector3.new(20, 5, 20)
+            Solid(elevator)
+            elevator.Material = Enum.Material.Metal
+            elevator.Color = Color3.fromRGB(150, 150, 150)
+            elevator.Parent = chunk
+            local door = Instance.new("Part")
+            door.Size = Vector3.new(4, 10, 0.2)
+            door.Position = elevator.Position + Vector3.new(0, 0, 2)
+            Ghost(door)
+            door.Material = Enum.Material.Metal
+            door.Color = Color3.fromRGB(130, 130, 130)
+            door.Parent = chunk
+            elevator.Touched:Connect(function(hit)
+                local char = Player.Character
+                if char and hit.Parent == char then
+                    local root = char:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        PlayAt(elevator.Position, CREAK_ID, 0.6, 1.2, 60, 3)
+                        root.CFrame = CFrame.new(0, 5, 0)
+                    end
+                end
+            end)
+        end
+    end
+
+    loadedChunks[chunkName] = data
+    chunk.Parent = MapFolder
 end
 
-if not _G.BACKROOMS_TICK then
-    _G.BACKROOMS_TICK = true
+-- 👁️ EYE MONSTER (dark level only, fears light) --------------------------
+local monsterFolder = Instance.new("Folder")
+monsterFolder.Name = "BR8DOrbiter"
+monsterFolder.Parent = Workspace
+
+local function DoKill()
+    if hurtEffect then
+        hurtEffect.TintColor = Color3.fromRGB(255, 60, 60)
+        hurtEffect.Brightness = -0.15
+        hurtEffect.Saturation = -0.4
+        TweenService:Create(hurtEffect, TweenInfo.new(2.5), {
+            TintColor = Color3.new(1, 1, 1),
+            Brightness = 0,
+            Saturation = 0
+        }):Play()
+    end
+    PlayScream()
+    local char = Player.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.Health = 0 end
+end
+
+local function SpawnEyeMonster()
+    local pos = HiveMind.PlayerPos
+    local ang = math.random() * math.pi * 2
+    local dist = 65 + math.random() * 25
+    local m = Instance.new("Part")
+    m.Shape = Enum.PartType.Ball
+    m.Size = Vector3.new(2.4, 2.4, 2.4)
+    m.Position = Vector3.new(pos.X + math.cos(ang) * dist, 6 + math.random() * 3, pos.Z + math.sin(ang) * dist)
+    Ghost(m)
+    m.Material = Enum.Material.Neon
+    m.Color = Color3.fromRGB(255, 40, 40)
+    m.Parent = monsterFolder
+
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(4, 0, 4, 0)
+    bb.Adornee = m
+    bb.Parent = m
+    local img = Instance.new("ImageLabel")
+    img.Image = EYE_IMAGE
+    img.Size = UDim2.new(1, 0, 1, 0)
+    img.BackgroundTransparency = 1
+    img.Parent = bb
+
+    local light = Instance.new("PointLight")
+    light.Color = Color3.fromRGB(255, 0, 0)
+    light.Range = 10
+    light.Brightness = 1
+    light.Parent = m
+
+    local pe = Instance.new("ParticleEmitter")
+    pe.Texture = "rbxassetid://243660364"
+    pe.Rate = 4
+    pe.Lifetime = NumberRange.new(0.6, 1.2)
+    pe.Speed = NumberRange.new(1, 3)
+    pe.Size = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1.4), NumberSequenceKeypoint.new(1, 0.2) })
+    pe.Color = ColorSequence.new(Color3.fromRGB(255, 40, 40))
+    pe.Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.4), NumberSequenceKeypoint.new(1, 1) })
+    pe.Parent = m
+
+    local drone = Instance.new("Sound")
+    drone.SoundId = CREAK_ID
+    drone.Looped = true
+    drone.PlaybackSpeed = 0.35
+    drone.Volume = 0
+    addEQ(drone, 8, -4, -10)
+    drone.RollOffMode = Enum.RollOffMode.InverseTapered
+    drone.RollOffMaxDistance = 90
+    pcall(function() drone.RollOffMinDistance = 10 end)
+    drone.Parent = m
+    drone:Play()
+
+    PlayAt(m.Position, CREAK_ID, 0.45, 0.8, 160, 3)
+
     task.spawn(function()
-        while RUNNING do
+        local baseY = m.Position.Y
+        local t = 0
+        local wasScared = false
+        local graceUntil = os.clock() + EYE_MONSTER_SPAWN_GRACE
+        while RUNNING and m.Parent do
+            local dt = task.wait(0.1)
+            t += dt
             local char = Player.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                local moving = hum.MoveDirection.Magnitude > 0.2
-                if moving then
-                    BobPhase = BobPhase + 0.12
-                    local bob = math.sin(BobPhase) * 0.15
-                    Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position + Vector3.new(0, bob, 0)), 0.18)
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                local offset = root.Position - m.Position
+                local d = offset.Magnitude
+                NearestThreat = d
+                NearestThreatTime = os.clock()
+
+                if HiveMind.CurrentLevel ~= 1 then
+                    m.Position += Vector3.new(0, 40 * dt, 0)
+                    drone.Volume = math.max(0, drone.Volume - dt)
+                    if m.Position.Y > 80 then m:Destroy() break end
+                else
+                    if d > 170 then m:Destroy() break end
+
+                    local safe = GetPlayerLightSafety()
+                    local scared = safe and d < 34
+
+                    if scared ~= wasScared then
+                        wasScared = scared
+                        if scared then
+                            PlayAt(m.Position, CREAK_ID, 0.6, 1.9, 100, 2)
+                            light.Color = Color3.fromRGB(120, 30, 30)
+                            light.Brightness = 0.35
+                            TweenService:Create(m, TweenInfo.new(0.4), { Size = Vector3.new(1.8, 1.8, 1.8) }):Play()
+                        else
+                            light.Color = Color3.fromRGB(255, 0, 0)
+                            light.Brightness = 1
+                            TweenService:Create(m, TweenInfo.new(0.4), { Size = Vector3.new(2.4, 2.4, 2.4) }):Play()
+                        end
+                    end
+
+                    if d < EYE_MONSTER_KILL_RANGE and not safe and os.clock() > graceUntil then
+                        DoKill()
+                        m:Destroy()
+                        break
+                    end
+
+                    local dir = offset.Unit
+                    local camDot = Camera.CFrame.LookVector:Dot(-dir)
+                    local frozen = camDot >= 0.55
+
+                    if scared then
+                        if d < 34 then
+                            m.Position = m.Position - dir * (EYE_MONSTER_SPEED * 0.9) * dt
+                        end
+                    elseif not frozen then
+                        local speed = EYE_MONSTER_SPEED * (1 + math.clamp((60 - d) / 60, 0, 1) * 0.8)
+                        m.Position += dir * speed * dt
+                    end
+
+                    local shiver = scared and math.sin(t * 30) * 0.25 or 0
+                    m.Position = Vector3.new(m.Position.X + shiver, baseY + math.sin(t * 2) * 0.8, m.Position.Z + shiver * 0.5)
+                    drone.Volume = math.clamp(1 - d / 70, 0, 1) * 0.7 * MASTER
                 end
             end
-            task.wait(0.03)
         end
     end)
 end
 
--- very light screen-vignette HUD
-pcall(function()
-    local gui = Player:FindFirstChild("PlayerGui")
-    if gui then
-        local old = gui:FindFirstChild("BRHUD")
-        if old then old:Destroy() end
+local function DoSmiler()
+    local pos = HiveMind.PlayerPos
+    local look = Camera.CFrame.LookVector
+    local flat = Vector3.new(look.X, 0, look.Z)
+    if flat.Magnitude < 0.1 then flat = Vector3.new(1, 0, 0) end
+    flat = flat.Unit
+    local spawnPos = pos + flat * 42 + Vector3.new((math.random() - 0.5) * 12, 6, (math.random() - 0.5) * 12)
+    local holder = Instance.new("Part")
+    Ghost(holder)
+    holder.Transparency = 1
+    holder.Size = Vector3.new(1, 1, 1)
+    holder.Position = spawnPos
+    holder.Parent = Workspace
+    local bb = Instance.new("BillboardGui")
+    bb.Size = UDim2.new(7, 0, 5, 0)
+    bb.Adornee = holder
+    bb.Parent = holder
+    local smile = Instance.new("TextLabel")
+    smile.Size = UDim2.new(1, 0, 1, 0)
+    smile.BackgroundTransparency = 1
+    smile.Text = ":)"
+    smile.TextColor3 = Color3.fromRGB(240, 240, 240)
+    smile.TextScaled = true
+    smile.Font = Enum.Font.Code
+    smile.TextTransparency = 1
+    smile.Parent = bb
+    TweenService:Create(smile, TweenInfo.new(1.2), { TextTransparency = 0.05 }):Play()
+    PlayAt(spawnPos, CREAK_ID, 0.3, 1.8, 60, 3)
+    task.delay(5 + math.random() * 3, function()
+        TweenService:Create(smile, TweenInfo.new(0.7), { TextTransparency = 1 }):Play()
+        task.delay(0.8, function() holder:Destroy() end)
+    end)
+end
+
+local function TrySpawnWanderer()
+    local pos = HiveMind.PlayerPos
+    local ang = math.random() * math.pi * 2
+    local start = pos + Vector3.new(math.cos(ang) * 55, 0, math.sin(ang) * 55)
+
+    local model = Instance.new("Model")
+    local torso = Instance.new("Part")
+    torso.Size = Vector3.new(2, 3, 1)
+    torso.Position = start + Vector3.new(0, 4.5, 0)
+    Ghost(torso)
+    torso.Material = Enum.Material.SmoothPlastic
+    torso.Color = Color3.fromRGB(25, 25, 28)
+    torso.Transparency = 0.25
+    torso.Parent = model
+    local head = Instance.new("Part")
+    head.Shape = Enum.PartType.Ball
+    head.Size = Vector3.new(1.2, 1.2, 1.2)
+    head.Position = start + Vector3.new(0, 6.7, 0)
+    Ghost(head)
+    head.Material = Enum.Material.SmoothPlastic
+    head.Color = Color3.fromRGB(25, 25, 28)
+    head.Transparency = 0.25
+    head.Parent = model
+    model.Parent = monsterFolder
+
+    task.spawn(function()
+        local t = 0
+        while RUNNING and model.Parent and t < 25 do
+            local dt = task.wait(0.15)
+            t += dt
+            local away = torso.Position - HiveMind.PlayerPos
+            away = Vector3.new(away.X, 0, away.Z)
+            if away.Magnitude < 1 then away = Vector3.new(1, 0, 0) end
+            local step = away.Unit * 7 * dt
+            torso.Position += step
+            head.Position += step
+            if (torso.Position - HiveMind.PlayerPos).Magnitude > 130 then break end
+        end
+        model:Destroy()
+    end)
+end
+
+-- ⚡ BLACKOUT (radios keep playing in the dark — on purpose) ----------------
+local function DoBlackout()
+    if Blackout then return end
+    Blackout = true
+    PlayAt(HiveMind.PlayerPos + Vector3.new(0, 8, 0), CREAK_ID, 0.7, 0.4, 250, 3)
+    PlayAt(HiveMind.PlayerPos + Vector3.new(0, 8, 0), THUMP_ID, 0.6, 0.3, 250, 3)
+    for _, c in pairs(loadedChunks) do
+        for _, L in ipairs(c.Lights) do
+            if L.Light.Parent then L.Light.Brightness = 0 end
+        end
+        for _, b in ipairs(c.Buzzes) do
+            if b.S.Parent then b.S.Volume = 0 end
+        end
     end
-end)
+    if HiveMind.CurrentLevel == 1 then
+        task.delay(2, function()
+            if Blackout and HiveMind.CurrentLevel == 1 then SpawnEyeMonster() end
+        end)
+    end
+    task.delay(math.random(7, 12), function()
+        local i = 0
+        for _, c in pairs(loadedChunks) do
+            for _, L in ipairs(c.Lights) do
+                if L.Light.Parent then
+                    i += 1
+                    task.delay((i % 40) * 0.02 + math.random() * 0.6, function()
+                        if not L.Light.Parent then return end
+                        task.spawn(function()
+                            for _ = 1, 3 do
+                                L.Light.Brightness = L.Base * (math.random() > 0.5 and 1 or 0.1)
+                                task.wait(math.random(3, 9) / 100)
+                            end
+                            L.Light.Brightness = L.Base
+                        end)
+                    end)
+                end
+            end
+            for _, b in ipairs(c.Buzzes) do
+                if b.S.Parent then b.S.Volume = b.V end
+            end
+        end
+        Blackout = false
+    end)
+end
+
+-- 💡 FLASHLIGHT -----------------------------------------------------------
+local Flashlight = { On = false, Part = nil, Light = nil }
+local function SetupFlashlight()
+    local part = Instance.new("Part")
+    part.Name = "BR8DFlashPart"
+    part.Size = Vector3.new(0.2, 0.2, 0.2)
+    part.Transparency = 1
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.Parent = Workspace
+    local spot = Instance.new("SpotLight")
+    spot.Angle = 64
+    spot.Range = 45
+    spot.Brightness = 2.0
+    spot.Color = Color3.fromRGB(255, 244, 214)
+    spot.Shadows = not IS_MOBILE
+    spot.Face = Enum.NormalId.Front
+    spot.Enabled = false
+    spot.Parent = part
+    -- wide, dim outer cone gives a soft brightness falloff at the beam edge
+    local halo = Instance.new("SpotLight")
+    halo.Name = "BR_FlashHalo"
+    halo.Angle = 100
+    halo.Range = 24
+    halo.Brightness = 0.45
+    halo.Color = Color3.fromRGB(255, 236, 200)
+    halo.Shadows = false
+    halo.Face = Enum.NormalId.Front
+    halo.Enabled = false
+    halo.Parent = part
+    Flashlight.Part = part
+    Flashlight.Light = spot
+    Flashlight.Halo = halo
+end
+
+local function ToggleFlashlight()
+    Flashlight.On = not Flashlight.On
+    if Flashlight.Light then
+        Flashlight.Light.Enabled = Flashlight.On
+        if Flashlight.Halo then Flashlight.Halo.Enabled = Flashlight.On end
+        local s = Instance.new("Sound")
+        s.SoundId = CREAK_ID
+        s.Volume = 0.25 * MASTER
+        s.PlaybackSpeed = 2
+        s.Parent = SoundService
+        s:Play()
+        Debris:AddItem(s, 1)
+    end
+end
+
+-- 🎮 INPUT ----------------------------------------------------------------
+local function SetupInput()
+    table.insert(Connections, UserInputService.InputBegan:Connect(function(input, gp)
+        if gp then return end
+        if input.KeyCode == FLASHLIGHT_KEY then
+            ToggleFlashlight()
+        end
+    end))
+
+    if IS_MOBILE then
+        local pg = Player:FindFirstChild("PlayerGui") or Player:WaitForChild("PlayerGui", 10)
+        if not pg then return end
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "BRMobile"
+        gui.ResetOnSpawn = false
+        gui.Parent = pg
+
+        local function mkBtn(color, x)
+            local b = Instance.new("TextButton")
+            b.Text = ""
+            b.Size = UDim2.new(0, 58, 0, 58)
+            b.Position = UDim2.new(1, x, 1, -120)
+            b.AnchorPoint = Vector2.new(1, 1)
+            b.BackgroundColor3 = color
+            b.BackgroundTransparency = 0.35
+            b.BorderSizePixel = 0
+            b.AutoButtonColor = true
+            b.Parent = gui
+            local c = Instance.new("UICorner")
+            c.CornerRadius = UDim.new(1, 0)
+            c.Parent = b
+            return b
+        end
+        mkBtn(Color3.fromRGB(255, 220, 120), -20).MouseButton1Click:Connect(ToggleFlashlight)
+        local run = mkBtn(Color3.fromRGB(120, 190, 255), -92)
+        run.MouseButton1Down:Connect(function() MobileSprint = true end)
+        run.MouseButton1Up:Connect(function() MobileSprint = false end)
+        run.MouseLeave:Connect(function() MobileSprint = false end)
+    end
+end
+
+-- 🌐 CHUNK STREAMING ------------------------------------------------------
+local function QueueChunk(cx, cz)
+    local name = cx .. "_" .. cz
+    if loadedChunks[name] or queuedSet[name] then return end
+    queuedSet[name] = true
+    table.insert(chunkQueue, { cx, cz })
+end
+
+local function UnloadChunk(name)
+    local c = loadedChunks[name]
+    if c then
+        c.Model:Destroy()
+        loadedChunks[name] = nil
+        litLights[name] = nil
+    end
+end
+
+-- 🔊 ROOM-SIZE REVERB (level 0 only) ---------------------------------------
+local reverbParams = RaycastParams.new()
+reverbParams.FilterType = Enum.RaycastFilterType.Exclude
+local avgRoomSize = nil
+
+local function UpdateDynamicReverb()
+    if HiveMind.CurrentLevel ~= 0 then avgRoomSize = nil return end
+    local pos = Camera.CFrame.Position
+    reverbParams.FilterDescendantsInstances = { Player.Character }
+    local total = 0
+    for i = 0, 7 do
+        local a = i / 8 * math.pi * 2
+        local r = Workspace:Raycast(pos, Vector3.new(math.cos(a), 0, math.sin(a)) * 80, reverbParams)
+        total = total + (r and r.Distance or 80)
+    end
+    local avg = total / 8
+    avgRoomSize = avgRoomSize and (avgRoomSize + (avg - avgRoomSize) * 0.5) or avg
+    local want = (avgRoomSize < 12 and "Room") or (avgRoomSize < 30 and "Sewer") or (avgRoomSize < 55 and "Hall") or "Arena"
+    if want ~= currentReverb then applyReverb(want) end
+end
 
 task.spawn(function()
-    local gui = Player:WaitForChild("PlayerGui")
-    local hud = Instance.new("ScreenGui")
-    hud.Name = "BRHUD"
-    hud.ResetOnSpawn = false
-    hud.IgnoreGuiInset = true
-    hud.Parent = gui
-
-    local mask = Instance.new("ImageLabel")
-    mask.Name = "Vignette"
-    mask.BackgroundTransparency = 1
-    mask.Size = UDim2.fromScale(1, 1)
-    mask.Image = "rbxassetid://1526718405"
-    mask.ImageColor3 = Color3.fromRGB(0, 0, 0)
-    mask.ImageTransparency = 0.42
-    mask.Parent = hud
-
-    local flash = Instance.new("Frame")
-    flash.BackgroundColor3 = Color3.fromRGB(255, 250, 240)
-    flash.BackgroundTransparency = 1
-    flash.Size = UDim2.fromScale(1, 1)
-    flash.Parent = hud
-
     while RUNNING do
-        local alpha = math.clamp((Blackout and 0.4 or 0) + math.clamp((MAX_STAMINA - Stamina.Value) / MAX_STAMINA, 0, 1) * 0.15, 0, 0.55)
-        mask.ImageTransparency = 0.5 - alpha * 0.2
-        flash.BackgroundTransparency = 0.85 - alpha * 0.5
-        task.wait(0.1)
+        pcall(UpdateDynamicReverb)
+        task.wait(IS_MOBILE and 1 or 0.5)
     end
 end)
 
-print("Backrooms enhanced edition started successfully.")
-message = "Backrooms enhanced edition started successfully."
+-- ▶️ INIT ------------------------------------------------------------------
+SetupGraphics()
+SetupFlashlight()
+SetupAudio()
+SetupInput()
+
+-- 🖼️ VERIFY WALL TEXTURE: fall back if the store asset fails to load
+do
+    local ok = false
+    pcall(function()
+        ContentProvider:PreloadAsync({ TEX_WALL_0 }, function(assetId, status)
+            if status == Enum.AssetFetchStatus.Success then
+                ok = true
+            end
+        end)
+    end)
+    if not ok then
+        WallTex.Current = TEX_WALL_0_FALLBACK
+        warn("[Backrooms] Custom wall texture failed to load — using fallback wallpaper.")
+    end
+    pcall(function()
+        ContentProvider:PreloadAsync(RADIO_SONGS)
+    end)
+end
+
+table.insert(Connections, Player.CharacterAdded:Connect(function(char)
+    local root = char:WaitForChild("HumanoidRootPart", 10)
+    task.wait(0.3)
+    if root and root.Parent then
+        root.CFrame = CFrame.new(0, 5, 0)
+    end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.WalkSpeed = BASE_WALKSPEED end
+    Stamina.Value = MAX_STAMINA
+end))
+
+if TELEPORT_TO_START then
+    task.wait(0.4)
+    local char = Player.Character or Player.CharacterAdded:Wait()
+    local root = char:WaitForChild("HumanoidRootPart", 10)
+    if root then root.CFrame = CFrame.new(0, 5, 0) end
+end
+
+RunService:BindToRenderStep("BackroomsEyeShake", Enum.RenderPriority.Camera.Value + 1, function(dt)
+    if not RUNNING then return end
+    local t = os.clock()
+
+    local target = (Sprinting and 6) or 0
+    SprintFOV = SprintFOV + (target - SprintFOV) * math.min(dt * 6, 1)
+    local dreamWob = (HiveMind.CurrentLevel == 2) and math.sin(t * 0.6) * 1.2 or 0
+    Camera.FieldOfView = FOV + SprintFOV + dreamWob
+
+    if Flashlight.Part and Flashlight.Part.Parent then
+        -- beam lags slightly behind the camera and sways a tiny bit
+        local target = Camera.CFrame
+        local rot = target.Rotation
+        if Flashlight.Ready then
+            rot = Flashlight.Part.CFrame.Rotation:Lerp(target.Rotation, math.min(dt * 16, 1))
+        end
+        Flashlight.Ready = true
+        Flashlight.Part.CFrame = CFrame.new(target.Position) * rot
+            * CFrame.Angles(math.sin(t * 1.3) * 0.004, math.cos(t * 1.1) * 0.004, 0)
+        -- faint glare: lift bloom a touch while the flashlight is on
+        local bloom = Lighting:FindFirstChild("BR_Bloom")
+        if bloom then
+            bloom.Intensity = bloom.Intensity + ((Flashlight.On and 0.4 or 0.25) - bloom.Intensity) * math.min(dt * 4, 1)
+        end
+    end
+
+    local char = Player.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local hSpeed = root and Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z).Magnitude or 0
+
+    BobPhase += dt * (4 + hSpeed * 0.55)
+    local bobAmp = math.clamp(hSpeed / SPRINT_SPEED, 0, 1) * 0.16
+    local bobY = math.sin(BobPhase) * bobAmp
+    local bobRoll = math.sin(BobPhase * 0.5) * bobAmp * 0.25
+    local idleY = math.sin(t * 1.1) * 0.02
+
+    local eff = (os.clock() - NearestThreatTime < 0.5) and NearestThreat or 999
+    local n = math.clamp(1 - eff / 26, 0, 1)
+    local amp = n * n * 0.45
+
+    if amp > 0.01 or bobAmp > 0.005 then
+        Camera.CFrame = Camera.CFrame
+            * CFrame.new(math.noise(t * 8, 1) * amp * 0.3, bobY + idleY + math.noise(1, t * 8) * amp * 0.3, 0)
+            * CFrame.Angles(math.noise(t * 7, 5) * amp * 0.03, math.noise(5, t * 7) * amp * 0.03, bobRoll)
+    end
+end)
+
+-- main streaming + atmosphere loop
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.2)
+        UpdateHiveMind()
+        local pos = HiveMind.PlayerPos
+        local ccx = math.floor(pos.X / CHUNK_SIZE + 0.5)
+        local ccz = math.floor(pos.Z / CHUNK_SIZE + 0.5)
+
+        for dx = -RENDER_RADIUS, RENDER_RADIUS do
+            for dz = -RENDER_RADIUS, RENDER_RADIUS do
+                if dx * dx + dz * dz <= RENDER_RADIUS * RENDER_RADIUS then
+                    QueueChunk(ccx + dx, ccz + dz)
+                end
+            end
+        end
+
+        for name, c in pairs(loadedChunks) do
+            local dx = c.CX - ccx
+            local dz = c.CZ - ccz
+            if dx * dx + dz * dz > UNLOAD_RADIUS * UNLOAD_RADIUS then
+                UnloadChunk(name)
+            end
+        end
+
+        local built = 0
+        local t0 = os.clock()
+        while #chunkQueue > 0 and built < BUILD_PER_FRAME and os.clock() - t0 < BUILD_TIME_BUDGET do
+            local bi, bd = 1, math.huge
+            for i, q in ipairs(chunkQueue) do
+                local d = (q[1] - ccx) ^ 2 + (q[2] - ccz) ^ 2
+                if d < bd then bi, bd = i, d end
+            end
+            local q = table.remove(chunkQueue, bi)
+            queuedSet[q[1] .. "_" .. q[2]] = nil
+            BuildChunkInstant(q[1], q[2])
+            built += 1
+        end
+
+        UpdateAtmosphere(math.sqrt(ccx * ccx + ccz * ccz))
+    end
+end)
+
+-- sprint / stamina / breathing
+task.spawn(function()
+    while RUNNING do
+        task.wait(0.1)
+        local char = Player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if hum and root then
+            local moving = root.AssemblyLinearVelocity.Magnitude > 3
+            local wantSprint = (UserInputService:IsKeyDown(SPRINT_KEY) or MobileSprint) and moving and Stamina.Value > 0
+            hum.WalkSpeed = wantSprint and SPRINT_SPEED or BASE_WALKSPEED
+            if wantSprint then
+                Stamina.Value = math.max(0, Stamina.Value - STAMINA_DRAIN * 0.1)
+            else
+                Stamina.Value = math.min(MAX_STAMINA, Stamina.Value + STAMINA_REGEN * 0.1)
+            end
+            Sprinting = wantSprint
+            if Stamina.Value < EXHAUST_BREATH_AT and math.random() < 0.12 then
+                local b = Instance.new("Sound")
+                b.SoundId = THUMP_ID
+                b.Volume = 0.16 * MASTER
+                b.PlaybackSpeed = 0.24 + math.random() * 0.06
+                addEQ(b, 6, -4, -10)
+                b.Parent = SoundService
+                b:Play()
+                Debris:AddItem(b, 2)
+            end
+        end
+    end
+end)
+
+-- entity + event scheduler (monsters: dark level ONLY)
+task.spawn(function()
+    while RUNNING do
+        task.wait(1)
+        local lvl = HiveMind.CurrentLevel
+
+        local count = 0
+        for _ in ipairs(monsterFolder:GetChildren()) do count += 1 end
+        if lvl == 1 and count < MAX_EYE_MONSTERS + (Blackout and 1 or 0) and math.random() < 0.30 then
+            SpawnEyeMonster()
+        end
+
+        if lvl == 0 and math.random() < 0.0035 then DoBlackout() end
+        if lvl == 1 and math.random() < 0.004 then DoSmiler() end
+        if math.random() < 0.0012 then TrySpawnWanderer() end
+    end
+end)
+
+-- random single-light glitches anywhere
+task.spawn(function()
+    while RUNNING do
+        task.wait(math.random(18, 50))
+        if not Blackout then
+            local keys = {}
+            for k in pairs(loadedChunks) do keys[#keys + 1] = k end
+            if #keys > 0 then
+                local c = loadedChunks[keys[math.random(#keys)]]
+                if c and #c.Lights > 0 then
+                    local L = c.Lights[math.random(#c.Lights)]
+                    if L.Light.Parent then
+                        task.spawn(function()
+                            local b = L.Light.Brightness
+                            if b <= 0.05 then return end
+                            for _ = 1, math.random(2, 4) do
+                                L.Light.Brightness = b * (math.random() * 0.5)
+                                task.wait(math.random(3, 8) / 100)
+                                L.Light.Brightness = b
+                                task.wait(math.random(4, 10) / 100)
+                            end
+                            L.Light.Brightness = b
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- dreamcore VHS glitch pulses
+task.spawn(function()
+    while RUNNING do
+        task.wait(math.random(6, 14))
+        if HiveMind.CurrentLevel == 2 and ccEffect then
+            for _ = 1, math.random(2, 4) do
+                ccEffect.Brightness = -0.25
+                task.wait(math.random(2, 5) / 100)
+                ccEffect.Brightness = 0.1
+                task.wait(math.random(2, 5) / 100)
+            end
+        end
+    end
+end)
+
+-- central animation loop
+task.spawn(function()
+    while RUNNING do
+        local t = os.clock()
+        for _, c in pairs(loadedChunks) do
+            for _, a in ipairs(c.Animations) do
+                if a.Part and a.Part.Parent then
+                    if a.Type == "bob" then
+                        local bob = math.sin(t * a.Speed + a.Phase) * a.Amp
+                        a.Part.CFrame = a.Base * CFrame.new(0, bob, 0)
+                        if a.GlowPart and a.GlowPart.Parent then
+                            a.GlowPart.CFrame = a.GlowBase * CFrame.new(0, bob, 0)
+                        end
+                    elseif a.Type == "spin" then
+                        a.Part.CFrame = a.Base * CFrame.Angles(0, t * a.Speed, 0)
+                    end
+                end
+            end
+        end
+        task.wait(0.05)
+    end
+end)
+
+-- 🛑 CLEANUP --------------------------------------------------------------
+_G.BACKROOMS_STOP = function()
+    RUNNING = false
+    pcall(function() RunService:UnbindFromRenderStep("BackroomsEyeShake") end)
+    for _, c in ipairs(Connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    for _, s in ipairs(sounds) do
+        pcall(function() s:Stop() s:Destroy() end)
+    end
+    pcall(function()
+        local pg = Player:FindFirstChild("PlayerGui")
+        if pg then
+            for _, n in ipairs({"BRHUD", "BRMobile"}) do
+                local old = pg:FindFirstChild(n)
+                if old then old:Destroy() end
+            end
+        end
+    end)
+    for _, n in ipairs({"DreamcoreMap", "BR8DOrbiter", "BR8DFlashPart"}) do
+        local old = Workspace:FindFirstChild(n)
+        if old then old:Destroy() end
+    end
+    for _, n in ipairs({"BR_CC", "BR_Bloom", "BR_Atmos", "BR_SunRays", "BR_Blur", "BR_Hurt", "BR_Sky", "BR_DOF"}) do
+        local e = Lighting:FindFirstChild(n)
+        if e then e:Destroy() end
+    end
+    pcall(function()
+        local char = Player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.WalkSpeed = 16 end
+    end)
+    Lighting.Ambient = Color3.fromRGB(128, 128, 128)
+    Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+    Lighting.Brightness = 2
+    Lighting.FogEnd = 100000
+    Lighting.FogStart = 0
+    SoundService.AmbientReverb = Enum.ReverbType.NoReverb
+end
